@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>东方Project 割草游戏 — 博丽灵梦</title>
+  <style>
+    /* ==================== 页面基础样式 ==================== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    }
+    /* 游戏容器 */
+    .game-wrapper {
+      text-align: center;
+    }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      border: 2px solid #cc8866;
+      border-radius: 8px;
+      box-shadow: 0 0 40px rgba(200, 100, 50, 0.3);
+    }
+    /* 状态提示栏 */
+    .status-bar {
+      margin-top: 12px;
+      color: #ccaa88;
+      font-size: 14px;
+      letter-spacing: 1px;
+    }
+    .status-bar span {
+      margin: 0 16px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="game-wrapper">
+  <!-- Canvas 画布：游戏所有画面都渲染在这上面 -->
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div class="status-bar">
+    <span id="livesDisplay">命: ❤️×3</span>
+    <span id="bombsDisplay">Bomb: [B]×2</span>
+    <span id="scoreDisplay">得分: 0</span>
+    <span id="fpsDisplay">FPS: 0</span>
+  </div>
+</div>
+
+<script>
+// ================================================================
+//  一、常量与配置
+// ================================================================
+const CONFIG = {
+  CANVAS_W: 800,                               // 画布宽度
+  CANVAS_H: 600,                               // 画布高度
+  PLAYER_RADIUS: 14,                           // 玩家（灵梦）半径
+  PLAYER_SPEED: 3.5,                           // 移动速度（像素/帧）
+  ENEMY_RADIUS: 10,                            // 敌人半径
+  ENEMY_SPEED: 0.8,                            // 敌人靠近速度
+  ENEMY_SPAWN_INTERVAL: 1200,                  // 敌人生成间隔（毫秒）
+  ENEMY_MAX: 40,                               // 最大敌人数量
+  BULLET_RADIUS: 5,                            // 子弹半径
+  BULLET_SPEED: 5,                             // 子弹飞行速度
+  AUTO_FIRE_INTERVAL: 1000,                    // 自动开火间隔（1 秒）
+  MAX_LIVES: 5,                                // 最大命数
+  MAX_BOMBS: 5,                                // 最大 Bomb 数
+  DAMAGE_INTERVAL: 1500,                       // 受伤无敌间隔（毫秒）
+  BOMB_BULLET_COUNT: 20,                       // Bomb 发射子弹数
+  BOMB_BULLET_RADIUS: 7,                       // Bomb 子弹半径
+  BOMB_BULLET_SPEED: 4.5,                      // Bomb 子弹速度
+  BOMB_INVINCIBLE_TIME: 1000,                  // Bomb 无敌时间（毫秒）
+  BOMB_ANIMATION_DURATION: 1000,               // Bomb 动画时长（毫秒）
+  SCORE_FOR_LIFE: 2000,                        // 奖励命所需分数
+  SCORE_FOR_BOMB: 5000,                        // 奖励 Bomb 所需分数
+};
+
+// ================================================================
+//  二、游戏状态机
+// ================================================================
+//  状态机是游戏逻辑的核心——它决定了游戏此刻在做什么。
+//  本游戏使用三个状态：
+//
+//    LOADING  →  PLAYING  →  GAME_OVER
+//      ↑                      │
+//      └──────────────────────┘  (按 R 键重开)
+//
+//  状态转移表：
+//  ┌────────────┬──────────────────────┬──────────────────┐
+//  │ 当前状态    │ 触发条件             │ 下一状态         │
+//  ├────────────┼──────────────────────┼──────────────────┤
+//  │ LOADING    │ 首帧渲染完成         │ PLAYING          │
+//  │ PLAYING    │ 命 ≤ 0              │ GAME_OVER        │
+//  │ GAME_OVER  │ 按下 R 键           │ PLAYING          │
+//  └────────────┴──────────────────────┴──────────────────┘
+//
+const STATE = {
+  LOADING:  'LOADING',    // 加载/初始化中
+  PLAYING:  'PLAYING',    // 主游戏循环运行中
+  GAME_OVER:'GAME_OVER',  // 游戏结束
+};
+
+// ================================================================
+//  三、Canvas 与 DOM 引用
+// ================================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const livesDisplay = document.getElementById('livesDisplay');
+const bombsDisplay = document.getElementById('bombsDisplay');
+const fpsDisplay = document.getElementById('fpsDisplay');
+
+// ================================================================
+//  四、核心游戏对象
+// ================================================================
+const game = {
+  // --- 状态机属性 ---
+  state: STATE.LOADING,         // 当前状态，初始为 LOADING
+  prevState: null,              // 上一帧的状态，用于检测状态变化
+  stateTimer: 0,                // 当前状态持续时长（毫秒）
+
+  // --- 游戏数据 ---
+  score: 0,                     // 击杀得分
+  lives: 3,                     // 命数（残机）
+  bombs: 2,                     // Bomb 数
+  scoreForNextLife: 2000,       // 下次奖励命所需分数
+  scoreForNextBomb: 5000,       // 下次奖励 Bomb 所需分数
+  isBombActive: false,          // Bomb 动画进行中
+  bombAnimStartTime: 0,         // Bomb 动画开始时间
+  bonusMessages: [],            // 浮动提示消息
+  frameCount: 0,                // 帧计数器（仅用于调试/效果）
+
+  // --- 游戏对象容器 ---
+  player: null,                 // 玩家对象
+  enemies: [],                  // 敌人数组
+  bullets: [],                  // 子弹数组
+  particles: [],                // 粒子特效数组
+
+  // --- 定时器 ID（用于清理）---
+  spawnTimerId: null,           // 敌人刷新定时器
+
+  // --- FPS 计算 ---
+  fps: 0,
+  _fpsFrames: 0,
+  _fpsLastTime: 0,
+};
+
+// ================================================================
+//  五、辅助工具函数
+// ================================================================
+
+/** 计算两点之间的距离 */
+function dist(x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/** 生成 [min, max) 范围内的随机整数 */
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min)) + min;
+}
+
+/** 限制值在 [min, max] 之间 */
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+// ================================================================
+//  六、游戏对象工厂
+// ================================================================
+
+/**
+ * 创建玩家对象
+ * @returns {Object} player
+ */
+function createPlayer() {
+  return {
+    x: CONFIG.CANVAS_W / 2,           // 出生在画布中央
+    y: CONFIG.CANVAS_H / 2,
+    radius: CONFIG.PLAYER_RADIUS,
+    invincibleUntil: 0,                 // 无敌截止时间（毫秒）
+    // 键盘状态（供移动系统读取）
+    keys: { w: false, a: false, s: false, d: false },
+  };
+}
+
+/**
+ * 创建敌人（小绿圈）
+ * @returns {Object} enemy
+ */
+function createEnemy() {
+  // 从画布四边之一随机出现
+  const side = randInt(0, 4); // 0=上,1=右,2=下,3=左
+  let x, y;
+  switch (side) {
+    case 0: x = randInt(0, CONFIG.CANVAS_W); y = -CONFIG.ENEMY_RADIUS; break;           // 上
+    case 1: x = CONFIG.CANVAS_W + CONFIG.ENEMY_RADIUS; y = randInt(0, CONFIG.CANVAS_H); break; // 右
+    case 2: x = randInt(0, CONFIG.CANVAS_W); y = CONFIG.CANVAS_H + CONFIG.ENEMY_RADIUS; break; // 下
+    case 3: x = -CONFIG.ENEMY_RADIUS; y = randInt(0, CONFIG.CANVAS_H); break;           // 左
+  }
+  return {
+    x, y,
+    radius: CONFIG.ENEMY_RADIUS,
+    hp: 1,                                // 一击必杀
+    vx: 0, vy: 0,                         // 速度分量（每帧计算）
+  };
+}
+
+/**
+ * 创建子弹（阴阳玉弹幕 — 小红圈）
+ * @param {number} tx  目标 x
+ * @param {number} ty  目标 y
+ * @returns {Object} bullet
+ */
+function createBullet(tx, ty) {
+  const p = game.player;
+  const angle = Math.atan2(ty - p.y, tx - p.x);
+  return {
+    x: p.x,
+    y: p.y,
+    radius: CONFIG.BULLET_RADIUS,
+    vx: Math.cos(angle) * CONFIG.BULLET_SPEED,
+    vy: Math.sin(angle) * CONFIG.BULLET_SPEED,
+    life: 120,      // 飞行 120 帧后自动消失（防止无限飞）
+  };
+}
+
+/**
+ * 创建死亡粒子特效
+ */
+function createExplosion(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1 + Math.random() * 3;
+    game.particles.push({
+      x, y,
+      radius: 2 + Math.random() * 3,
+      color,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 30 + randInt(0, 20),           // 持续 30~50 帧
+      maxLife: 50,
+    });
+  }
+}
+
+// ================================================================
+//  七、状态机 —— 状态进入 / 退出
+// ================================================================
+
+/** 进入 PLAYING 状态（重置游戏） */
+function enterPlaying() {
+  game.score = 0;
+  game.lives = 3;
+  game.bombs = 2;
+  game.scoreForNextLife = CONFIG.SCORE_FOR_LIFE;
+  game.scoreForNextBomb = CONFIG.SCORE_FOR_BOMB;
+  game.isBombActive = false;
+  game.bonusMessages = [];
+  game.frameCount = 0;
+  game.enemies = [];
+  game.bullets = [];
+  game.particles = [];
+  game.player = createPlayer();
+
+  // 启动敌人刷新定时器
+  if (game.spawnTimerId) clearInterval(game.spawnTimerId);
+  game.spawnTimerId = setInterval(() => {
+    if (game.state !== STATE.PLAYING) return;     // 非游戏中不生成
+    if (game.enemies.length >= CONFIG.ENEMY_MAX) return; // 已达上限
+    game.enemies.push(createEnemy());
+  }, CONFIG.ENEMY_SPAWN_INTERVAL);
+
+  // 立即生成 3 个敌人开局
+  for (let i = 0; i < 3; i++) {
+    game.enemies.push(createEnemy());
+  }
+}
+
+/** 进入 GAME_OVER 状态 */
+function enterGameOver() {
+  // 停止敌人刷新
+  if (game.spawnTimerId) {
+    clearInterval(game.spawnTimerId);
+    game.spawnTimerId = null;
+  }
+}
+
+/**
+ * 状态机核心调度 — 每帧调用一次
+ * 检测状态变化，执行对应的进入/退出逻辑。
+ */
+function updateStateMachine() {
+  const current = game.state;
+
+  // 首次状态进入（prevState === null 发生在第一帧）
+  if (game.prevState === null) {
+    if (current === STATE.LOADING) {
+      // LOADING 不需要额外初始化，直接过渡到 PLAYING
+      game.state = STATE.PLAYING;
+      enterPlaying();
+    }
+    game.prevState = current;
+    return;
+  }
+
+  // --- 状态转移检测 ---
+
+  // 规则 1: PLAYING 下玩家死亡 → GAME_OVER
+  if (current === STATE.PLAYING && game.lives <= 0) {
+    game.state = STATE.GAME_OVER;
+    enterGameOver();
+  }
+
+  // 规则 2: GAME_OVER 下按 R → PLAYING（按键在 handleKeyDown 中辅助触发）
+  // 规则 3: 第一帧 LOADING → PLAYING（已在上面处理）
+
+  game.prevState = game.state;
+}
+
+// ================================================================
+//  八、输入处理
+// ================================================================
+
+document.addEventListener('keydown', (e) => {
+  const key = e.key.toLowerCase();
+
+  // 玩家移动按键
+  if (['w', 'a', 's', 'd'].includes(key)) {
+    e.preventDefault();
+    if (game.player) game.player.keys[key] = true;
+  }
+
+  // Bomb 按键（X 或 空格）
+  if ((key === 'x' || key === ' ') && game.state === STATE.PLAYING) {
+    e.preventDefault();
+    useBomb();
+  }
+
+  // GAME_OVER 下按 R 键重开
+  if (key === 'r' && game.state === STATE.GAME_OVER) {
+    game.state = STATE.PLAYING;
+    enterPlaying();
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  const key = e.key.toLowerCase();
+  if (['w', 'a', 's', 'd'].includes(key)) {
+    if (game.player) game.player.keys[key] = false;
+  }
+});
+
+// ================================================================
+//  九、游戏逻辑更新（每帧调用）
+// ================================================================
+
+/**
+ * 更新玩家位置（WASD 移动）
+ * 边界碰撞：不让玩家移出画布
+ */
+function updatePlayer(dt) {
+  const p = game.player;
+  if (!p) return;
+
+  let dx = 0, dy = 0;
+  if (p.keys.w) dy -= 1;
+  if (p.keys.s) dy += 1;
+  if (p.keys.a) dx -= 1;
+  if (p.keys.d) dx += 1;
+
+  // 归一化对角线移动（防止斜向加速）
+  if (dx !== 0 && dy !== 0) {
+    const inv = 1 / Math.SQRT2;  // ≈ 0.707
+    dx *= inv;
+    dy *= inv;
+  }
+
+  p.x += dx * CONFIG.PLAYER_SPEED;
+  p.y += dy * CONFIG.PLAYER_SPEED;
+
+  // 边界限制
+  p.x = clamp(p.x, p.radius, CONFIG.CANVAS_W - p.radius);
+  p.y = clamp(p.y, p.radius, CONFIG.CANVAS_H - p.radius);
+}
+
+/**
+ * 自动瞄准射击 — 每 1 秒向最近敌人发射子弹
+ * @param {number} now  当前时间（毫秒）
+ */
+function autoFire(now) {
+  const p = game.player;
+  if (!p) return;
+
+  // 没有敌人就不开火
+  if (game.enemies.length === 0) return;
+
+  // 寻找最近的敌人
+  let nearest = null;
+  let minDist = Infinity;
+  for (const enemy of game.enemies) {
+    const d = dist(p.x, p.y, enemy.x, enemy.y);
+    if (d < minDist) {
+      minDist = d;
+      nearest = enemy;
+    }
+  }
+
+  // 朝最近的敌人发射子弹
+  if (nearest) {
+    game.bullets.push(createBullet(nearest.x, nearest.y));
+  }
+}
+
+/** 上一次自动开火的时间（毫秒） */
+let lastFireTime = 0;
+
+/**
+ * 更新敌人：朝玩家移动
+ */
+function updateEnemies() {
+  const p = game.player;
+  if (!p) return;
+
+  for (const enemy of game.enemies) {
+    const dx = p.x - enemy.x;
+    const dy = p.y - enemy.y;
+    const d = dist(0, 0, dx, dy);
+    if (d > 0.1) {
+      enemy.vx = (dx / d) * CONFIG.ENEMY_SPEED;
+      enemy.vy = (dy / d) * CONFIG.ENEMY_SPEED;
+    } else {
+      enemy.vx = 0;
+      enemy.vy = 0;
+    }
+    enemy.x += enemy.vx;
+    enemy.y += enemy.vy;
+  }
+}
+
+/**
+ * 更新子弹：移动 + 生命周期衰减
+ */
+function updateBullets() {
+  for (let i = game.bullets.length - 1; i >= 0; i--) {
+    const b = game.bullets[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+    // 超出画布或寿命耗尽就移除
+    if (b.life <= 0 ||
+        b.x < -50 || b.x > CONFIG.CANVAS_W + 50 ||
+        b.y < -50 || b.y > CONFIG.CANVAS_H + 50) {
+      game.bullets.splice(i, 1);
+    }
+  }
+}
+
+/**
+ * 更新粒子特效
+ */
+function updateParticles() {
+  for (let i = game.particles.length - 1; i >= 0; i--) {
+    const pt = game.particles[i];
+    pt.x += pt.vx;
+    pt.y += pt.vy;
+    pt.life--;
+    if (pt.life <= 0) {
+      game.particles.splice(i, 1);
+    }
+  }
+}
+
+/**
+ * 碰撞检测系统
+ *
+ * 【子弹 vs 敌人】
+ *   每颗子弹检测是否与某个敌人相交（圆心距离 < 半径和）。
+ *   若命中，移除子弹与敌人，增加分数，播放粒子特效。
+ *
+ * 【敌人 vs 玩家】
+ *   每个敌人检测是否与玩家相交。
+ *   若命中且玩家不在无敌时间内（invincibleUntil），
+ *   扣 1 命，并重置无敌计时器。
+ */
+function checkCollisions(now) {
+  const p = game.player;
+  if (!p) return;
+
+  // ---- 子弹 vs 敌人 ----
+  for (let bi = game.bullets.length - 1; bi >= 0; bi--) {
+    const b = game.bullets[bi];
+    let bulletUsed = false;
+
+    for (let ei = game.enemies.length - 1; ei >= 0; ei--) {
+      const e = game.enemies[ei];
+      if (dist(b.x, b.y, e.x, e.y) < b.radius + e.radius) {
+        // 命中！移除敌人和子弹
+        createExplosion(e.x, e.y, '#44ff66', 8);
+        game.enemies.splice(ei, 1);
+        bulletUsed = true;
+        game.score += 10;
+        checkScoreRewards();
+        break; // 一颗子弹只打一个敌人
+      }
+    }
+
+    if (bulletUsed) {
+      game.bullets.splice(bi, 1);
+    }
+  }
+
+  // ---- 敌人 vs 玩家 ----
+  // 无敌检测
+  if (now < p.invincibleUntil) return;
+
+  for (let ei = game.enemies.length - 1; ei >= 0; ei--) {
+    const e = game.enemies[ei];
+    if (dist(p.x, p.y, e.x, e.y) < p.radius + e.radius) {
+      // 玩家受伤 —— 扣 1 命
+      game.lives--;
+      p.invincibleUntil = now + CONFIG.DAMAGE_INTERVAL;
+      createExplosion(p.x, p.y, '#ff6644', 12);
+
+      // 击退这个敌人（防止连续伤害）
+      const angle = Math.atan2(e.y - p.y, e.x - p.x);
+      e.x += Math.cos(angle) * 40;
+      e.y += Math.sin(angle) * 40;
+
+      if (game.lives <= 0) {
+        // 命归零 —— 状态机会在 updateStateMachine 中处理
+        createExplosion(p.x, p.y, '#ff4444', 30);
+      }
+      break; // 一帧最多触发一次受伤
+    }
+  }
+}
+
+// ================================================================
+//  十、渲染系统（每帧调用）
+// ================================================================
+
+/**
+ * 绘制背景
+ */
+function drawBackground() {
+  // 深色星空背景
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.CANVAS_H);
+
+  // 简单星星效果（用随机点模拟）
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  for (let i = 0; i < 60; i++) {
+    // 根据帧数缓慢移动星星，产生微妙动态
+    const sx = (i * 137 + game.frameCount * 0.2) % CONFIG.CANVAS_W;
+    const sy = (i * 251 + game.frameCount * 0.1) % CONFIG.CANVAS_H;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * 绘制玩家（灵梦 — 红圈 + 简单的巫女元素）
+ */
+function drawPlayer() {
+  const p = game.player;
+  if (!p) return;
+
+  // 受伤闪烁效果（无敌时半透明闪烁）
+  const now = performance.now();
+  if (now < p.invincibleUntil && Math.floor(now / 100) % 2 === 0) {
+    ctx.globalAlpha = 0.4;
+  }
+
+  // 身体（红色主圈）
+  ctx.fillStyle = '#ee2233';
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 发带/装饰（白色小圈，模拟灵梦的发带）
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(p.x + 6, p.y - 6, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(p.x - 6, p.y - 6, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 轮廓
+  ctx.strokeStyle = '#ffccaa';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.globalAlpha = 1.0;
+}
+
+/**
+ * 绘制敌人（小绿圈）
+ */
+function drawEnemies() {
+  for (const e of game.enemies) {
+    ctx.fillStyle = '#33dd55';
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#88ff88';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+/**
+ * 绘制子弹（阴阳玉 — 小红圈）
+ */
+function drawBullets() {
+  for (const b of game.bullets) {
+    const color = b.color || '#ff6633';
+    // 弹体
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 发光效果
+    ctx.fillStyle = color + '44';  // 追加 alpha 通道，~27% 透明度
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.radius * 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * 绘制粒子特效
+ */
+function drawParticles() {
+  for (const pt of game.particles) {
+    const alpha = pt.life / pt.maxLife;     // 随生命周期淡出
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = pt.color;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, pt.radius * alpha, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1.0;
+}
+
+// ================================================================
+//  十一、Bomb 系统
+// ================================================================
+
+/**
+ * 使用 Bomb
+ * 消耗 1 颗 Bomb，发射 20 颗金色散弹，清除全屏敌人，附带无敌
+ */
+function useBomb() {
+  if (game.bombs <= 0 || game.isBombActive) return;
+
+  game.bombs--;
+  game.isBombActive = true;
+  game.bombAnimStartTime = performance.now();
+
+  // 玩家获得短暂无敌
+  if (game.player) {
+    game.player.invincibleUntil = performance.now() + CONFIG.BOMB_INVINCIBLE_TIME;
+  }
+
+  // 清除屏幕上所有敌人（每个给 10 分 + 爆炸粒子）
+  for (const e of game.enemies) {
+    createExplosion(e.x, e.y, '#44ff66', 8);
+    game.score += 10;
+  }
+  game.enemies = [];
+
+  // 检查分数奖励（可能因 Bomb 清屏跨越多个阈值）
+  checkScoreRewards();
+
+  // 发射 20 颗金色大子弹呈 360° 圆形散布
+  const angleStep = (Math.PI * 2) / CONFIG.BOMB_BULLET_COUNT;
+  for (let i = 0; i < CONFIG.BOMB_BULLET_COUNT; i++) {
+    const angle = angleStep * i;
+    game.bullets.push({
+      x: game.player.x,
+      y: game.player.y,
+      radius: CONFIG.BOMB_BULLET_RADIUS,
+      vx: Math.cos(angle) * CONFIG.BOMB_BULLET_SPEED,
+      vy: Math.sin(angle) * CONFIG.BOMB_BULLET_SPEED,
+      life: 120,
+      color: '#ffcc44',           // 金色标记
+    });
+  }
+}
+
+/**
+ * 检查分数奖励条件
+ * 每 2000 分奖励 1 命，每 5000 分奖励 1 Bomb（可累计多次）
+ */
+function checkScoreRewards() {
+  while (game.score >= game.scoreForNextLife && game.lives < CONFIG.MAX_LIVES) {
+    game.lives++;
+    game.scoreForNextLife += CONFIG.SCORE_FOR_LIFE;
+    game.bonusMessages.push({
+      text: '+1 LIFE',
+      startTime: performance.now(),
+    });
+  }
+
+  while (game.score >= game.scoreForNextBomb && game.bombs < CONFIG.MAX_BOMBS) {
+    game.bombs++;
+    game.scoreForNextBomb += CONFIG.SCORE_FOR_BOMB;
+    game.bonusMessages.push({
+      text: '+1 BOMB',
+      startTime: performance.now(),
+    });
+  }
+}
+
+// ================================================================
+//  十二、Bomb 动画渲染
+// ================================================================
+
+/**
+ * 绘制 Bomb 特效
+ * - 白闪（~300ms 淡出）
+ * - 扩散光环（从玩家位置向外扩展的圆环）
+ * - "BOMB!" 文字（屏幕中央渐隐）
+ */
+function drawBombEffect() {
+  if (!game.isBombActive) return;
+  const p = game.player;
+  if (!p) return;
+
+  const now = performance.now();
+  const elapsed = now - game.bombAnimStartTime;
+  const duration = CONFIG.BOMB_ANIMATION_DURATION;
+  const progress = Math.min(elapsed / duration, 1);
+
+  if (progress >= 1) {
+    game.isBombActive = false;
+    return;
+  }
+
+  // 白闪（前 300ms 逐渐淡出）
+  if (progress < 0.3) {
+    const flashAlpha = (1 - progress / 0.3) * 0.5;
+    ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+    ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.CANVAS_H);
+  }
+
+  // 扩散光环
+  const ringRadius = progress * 300;
+  const ringAlpha = (1 - progress) * 0.6;
+  ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, ringRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 第二条更淡的光环
+  ctx.strokeStyle = `rgba(255, 200, 100, ${ringAlpha * 0.5})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, ringRadius * 0.8, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // "BOMB!" 文字（前 500ms 渐隐）
+  if (progress < 0.5) {
+    const textAlpha = 1 - progress / 0.5;
+    ctx.fillStyle = `rgba(255, 255, 255, ${textAlpha})`;
+    ctx.font = 'bold 48px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BOMB!', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2);
+  }
+}
+
+// ================================================================
+//  十三、浮动奖励提示
+// ================================================================
+
+/**
+ * 绘制浮动奖励提示（+1 LIFE / +1 BOMB）
+ * 从玩家位置向上升起，逐渐透明，2 秒后消失
+ */
+function drawBonusMessages() {
+  const p = game.player;
+  if (!p) return;
+  const now = performance.now();
+  for (let i = game.bonusMessages.length - 1; i >= 0; i--) {
+    const msg = game.bonusMessages[i];
+    const elapsed = now - msg.startTime;
+    if (elapsed > 2000) {
+      game.bonusMessages.splice(i, 1);
+      continue;
+    }
+    const progress = elapsed / 2000;
+    const alpha = 1 - progress;
+    const yOffset = -progress * 50; // 向上浮动
+
+    ctx.fillStyle = `rgba(255, 204, 68, ${alpha})`;
+    ctx.font = 'bold 24px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(msg.text, p.x, p.y + yOffset - 20);
+  }
+}
+
+// ================================================================
+//  十四、状态栏更新
+// ================================================================
+
+/**
+ * 更新页面底部状态栏显示
+ */
+function updateStatusBar() {
+  scoreDisplay.textContent = `得分: ${game.score}`;
+  livesDisplay.textContent = `命: ❤️×${game.lives}`;
+  bombsDisplay.textContent = `Bomb: [B]×${game.bombs}`;
+}
+
+// ================================================================
+//  十五、游戏结束界面
+// ================================================================
+
+/**
+ * 绘制 GAME_OVER 界面
+ */
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.CANVAS_H);
+
+  ctx.fillStyle = '#ff6644';
+  ctx.font = 'bold 48px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2 - 20);
+
+  ctx.fillStyle = '#ccaa88';
+  ctx.font = '20px "Segoe UI", sans-serif';
+  ctx.fillText(`最终得分: ${game.score}`, CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2 + 40);
+
+  ctx.fillStyle = '#aa8866';
+  ctx.font = '16px "Segoe UI", sans-serif';
+  ctx.fillText('按 R 键重新开始', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2 + 80);
+}
+
+// ================================================================
+//  十六、FPS 计算
+// ================================================================
+
+function updateFPS(now) {
+  game._fpsFrames++;
+  if (now - game._fpsLastTime >= 1000) {
+    game.fps = game._fpsFrames;
+    game._fpsFrames = 0;
+    game._fpsLastTime = now;
+    fpsDisplay.textContent = `FPS: ${game.fps}`;
+  }
+}
+
+// ================================================================
+//  十七、主游戏循环
+// ================================================================
+
+/**
+ * 【主循环】— 游戏的心脏
+ *
+ *  每一帧的执行流程：
+ *
+ *   ┌─────────────────────────────────────────────┐
+ *   │  1. 更新 FPS 计时                          │
+ *   ├─────────────────────────────────────────────┤
+ *   │  2. 状态机调度（状态转移检测 + 进入/退出） │
+ *   ├─────────────────────────────────────────────┤
+ *   │  3. 按当前状态执行逻辑：                    │
+ *   │     PLAYING:                               │
+ *   │       ├─ 更新玩家移动                      │
+ *   │       ├─ 自动瞄准射击（每隔 1 秒）         │
+ *   │       ├─ 更新敌人 AI                       │
+ *   │       ├─ 更新子弹                          │
+ *   │       ├─ 更新粒子                          │
+ *   │       ├─ 碰撞检测                          │
+ *   │       └─ game.frameCount++                │
+ *   │                                            │
+ *   │     GAME_OVER: (不做更新，只等待输入)      │
+ *   │     LOADING: (仅第一帧，立即过渡)          │
+ *   ├─────────────────────────────────────────────┤
+ *   │  4. 渲染（绘制背景 → 玩家 → 敌人 →        │
+ *   │     子弹 → 粒子 → 叠加 UI）               │
+ *   └─────────────────────────────────────────────┘
+ */
+function gameLoop(timestamp) {
+  // ---- 步骤 1: FPS ----
+  updateFPS(timestamp);
+
+  // ---- 步骤 2: 状态机调度 ----
+  updateStateMachine();
+
+  // ---- 步骤 3: 逻辑更新（仅在 PLAYING 状态执行）----
+  if (game.state === STATE.PLAYING) {
+    const now = performance.now();
+
+    updatePlayer();                               // WASD 移动
+
+    // 自动开火（每 1 秒）
+    if (now - lastFireTime >= CONFIG.AUTO_FIRE_INTERVAL) {
+      autoFire(now);
+      lastFireTime = now;
+    }
+
+    updateEnemies();                              // 敌人靠近玩家
+    updateBullets();                              // 子弹飞行
+    updateParticles();                            // 粒子特效
+
+    checkCollisions(now);                         // 碰撞检测
+
+    game.frameCount++;
+  }
+
+  // ---- 步骤 4: 渲染 ----
+  drawBackground();
+  drawEnemies();
+  drawBullets();
+  drawParticles();
+  drawPlayer();
+  drawBombEffect();                              // Bomb 特效（白闪 + 光环 + BOMB! 文字）
+  drawBonusMessages();                           // 浮动奖励提示（+1 LIFE / +1 BOMB）
+
+  // 叠加态 UI
+  if (game.state === STATE.GAME_OVER) {
+    drawGameOver();
+  }
+
+  // ---- 步骤 5: 更新状态栏 ----
+  updateStatusBar();
+
+  // ---- 请求下一帧 ----
+  requestAnimationFrame(gameLoop);
+}
+
+// ================================================================
+//  十八、启动游戏
+// ================================================================
+
+// 初始化 FPS 计时基准
+game._fpsLastTime = performance.now();
+
+// 启动主循环
+requestAnimationFrame(gameLoop);
+
+// 控制台提示
+console.log('🎮 东方Project 割草游戏已启动！');
+console.log('操作: WASD 移动 | X/空格 Bomb | R 键重新开始');
+console.log('系统: 命(残机)制 — 初始3命，被弹扣1命，命归零则 Game Over');
+console.log('Bomb: 消耗1颗 Bomb → 散射20发金色子弹 + 清屏 + 无敌');
+console.log('奖励: 每2000分奖励+1命，每5000分奖励+1 Bomb');
+</script>
+
+</body>
+</html>
