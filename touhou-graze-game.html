@@ -509,6 +509,7 @@ function createEnemy() {
     hitFlash: 0,
     shootTimer: 0,
     walkDir: Math.random() > 0.5 ? 1 : -1,
+    targetX: randInt(60, CONFIG.CANVAS_W - 60),  // 下落阶段的目标 x 坐标（分散到各位置）
     isBoss: type === 'big_boss',
   };
 }
@@ -861,7 +862,7 @@ function autoFire(now) {
 
   // 根据角色发射不同副子弹
   if (game.currentChar === 'reimu') {
-    // 灵梦：从辅助子机发射追踪副子弹
+    // 灵梦：从辅助子机发射追踪副子弹（life翻倍防止半路消失）
     for (let i = 0; i < subCount; i++) {
       const c = game.companions[i];
       if (!c) continue;
@@ -874,7 +875,7 @@ function autoFire(now) {
           radius: CONFIG.SUB_BULLET_RADIUS,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
-          life: CONFIG.BULLET_LIFE,
+          life: CONFIG.BULLET_LIFE * 2,  // 追踪弹速度慢，需要更长的寿命才能打到上半屏的敌人
           damage: CONFIG.SUB_BULLET_DMG,
           isMain: false,
           color: SUB_COLORS[i % SUB_COLORS.length],
@@ -932,10 +933,9 @@ function updateEnemies() {
     // 所有敌人在上半屏来回移动，不靠近玩家
     const upperBound = CONFIG.CANVAS_H * 0.5;
     if (e.y < upperBound) {
-      // 下落阶段：向下移动，同时朝屏幕中心横向趋近（防止左右侧生成的敌人一直停在屏幕外）
+      // 下落阶段：向下移动，同时朝随机目标 x 坐标横向趋近（防止全聚中间造成弹幕密集）
       e.y += e.speed;
-      const centerX = CONFIG.CANVAS_W / 2;
-      e.x += (centerX - e.x) * 0.02 * e.speed;
+      e.x += (e.targetX - e.x) * 0.03 * e.speed;
     } else {
       // 到达上半屏下界，改为左右巡逻
       e.y = Math.min(e.y, upperBound);
@@ -966,38 +966,56 @@ function updateEnemies() {
     if (e.shootTimer >= interval) {
       e.shootTimer = 0;
       const p = game.player;
-      let angle;
+      const spawnBullet = (ang) => {
+        game.enemyBullets.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(ang) * 3,
+          vy: Math.sin(ang) * 3,
+          radius: 4,
+          color: '#ffcc00',
+          life: 180,
+        });
+      };
 
       if (e.type === 'fuzzy') {
         // 毛玉：一颗子弹，只往下
-        angle = Math.PI / 2;
+        spawnBullet(Math.PI / 2);
       } else if (e.type === 'butterfly') {
         // 蝴蝶：一颗子弹，50% 向下，50% 瞄准玩家
         if (Math.random() < 0.5 && p) {
-          angle = Math.atan2(p.y - e.y, p.x - e.x);
+          spawnBullet(Math.atan2(p.y - e.y, p.x - e.x));
         } else {
-          angle = Math.PI / 2;
+          spawnBullet(Math.PI / 2);
         }
-      } else if (e.type === 'crow' || e.type === 'mini_boss' || e.type === 'big_boss') {
-        // 乌鸦/小boss/大boss：一颗子弹，瞄准玩家附近（带随机偏移）
+      } else if (e.type === 'crow') {
+        // 乌鸦：一颗子弹，瞄准玩家附近（带随机偏移）
         if (p) {
           const baseAngle = Math.atan2(p.y - e.y, p.x - e.x);
-          angle = baseAngle + (Math.random() - 0.5) * 0.5;
+          spawnBullet(baseAngle + (Math.random() - 0.5) * 0.5);
         } else {
-          angle = Math.PI / 2;
+          spawnBullet(Math.PI / 2);
         }
-      } else {
-        angle = Math.PI / 2;
+      } else if (e.type === 'mini_boss') {
+        // 小boss：一颗子弹，瞄准玩家附近（带随机偏移）
+        if (p) {
+          const baseAngle = Math.atan2(p.y - e.y, p.x - e.x);
+          spawnBullet(baseAngle + (Math.random() - 0.5) * 0.5);
+        } else {
+          spawnBullet(Math.PI / 2);
+        }
+      } else if (e.type === 'big_boss') {
+        // 大boss：3 发扇形弹幕瞄准玩家
+        if (p) {
+          const baseAngle = Math.atan2(p.y - e.y, p.x - e.x);
+          for (let j = -1; j <= 1; j++) {
+            spawnBullet(baseAngle + j * 0.25);
+          }
+        } else {
+          for (let j = -1; j <= 1; j++) {
+            spawnBullet(Math.PI / 2 + j * 0.25);
+          }
+        }
       }
-
-      game.enemyBullets.push({
-        x: e.x, y: e.y,
-        vx: Math.cos(angle) * 3,
-        vy: Math.sin(angle) * 3,
-        radius: 4,
-        color: '#ffcc00',
-        life: 180,
-      });
       playSound('shoot');
     }
 
@@ -2291,12 +2309,12 @@ function drawBombEffect() {
     ctx.stroke();
   }
 
-  // 魔理沙：显示前方范围
+  // 魔理沙：显示前方范围（黄色，与灵梦同色）
   if (game.bombType === 'marisa' && p) {
     const range = CONFIG.CANVAS_W / 3;
-    ctx.fillStyle = 'rgba(100, 200, 255, 0.1)';
+    ctx.fillStyle = 'rgba(255, 150, 50, 0.08)';
     ctx.fillRect(p.x - range / 2, 0, range, p.y);
-    ctx.strokeStyle = 'rgba(100, 200, 255, 0.5)';
+    ctx.strokeStyle = 'rgba(255, 100, 30, 0.5)';
     ctx.lineWidth = 2;
     ctx.strokeRect(p.x - range / 2, 0, range, p.y);
   }
