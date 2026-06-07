@@ -58,6 +58,13 @@
       <option value="snow">雪山</option>
     </select>
   </div>
+
+  <div style="margin-top: 10px; display: flex; justify-content: center; gap: 12px; align-items: center;">
+    <button id="newGameBtn" style="background: #cc8866; color: #fff; border: none; border-radius: 6px; padding: 6px 18px; font-size: 14px; cursor: pointer; font-weight: bold;">新游戏</button>
+    <label style="color: #ccaa88; font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
+      <input type="checkbox" id="debugToggle"> Debug（Power=5）
+    </label>
+  </div>
 </div>
 
 <script>
@@ -245,10 +252,10 @@ const CONFIG = {
   ENEMY_SPAWN_RAMP_DURATION: 60,   // v3.2: 渐变到最快所需秒数
   ENEMY_MAX: 50,
 
-  // 敌人解锁分数 (v3 新增)
-  UNLOCK_SCORE_BUTTERFLY: 500,
-  UNLOCK_SCORE_CROW: 1000,
-  UNLOCK_SCORE_MINI_BOSS: 1500,
+  // 敌人解锁分数 (v6: 降低门槛，前期更有趣)
+  UNLOCK_SCORE_BUTTERFLY: 100,
+  UNLOCK_SCORE_CROW: 300,
+  UNLOCK_SCORE_MINI_BOSS: 800,
 
   // Bomb
   BOMB_BULLET_COUNT: 20,
@@ -357,6 +364,9 @@ const game = {
   // --- v5.1: 当前背景 ---
   currentBg: 'beach',
 
+  // --- v6: Debug 模式 ---
+  debugMode: false,
+
   // --- FPS ---
   fps: 0,
   _fpsFrames: 0,
@@ -463,13 +473,13 @@ function createEnemy() {
 
   const cfg = ENEMY_TYPES[type];
 
-  // 从上/左/右 3 边随机出现（不下方）
+  // v6: 从上/左/右 3 边随机出现，左右只在上半屏
   const side = randInt(0, 3);
   let x, y;
   switch (side) {
     case 0: x = randInt(0, CONFIG.CANVAS_W); y = -cfg.radius - 5; break;
-    case 1: x = CONFIG.CANVAS_W + cfg.radius + 5; y = randInt(0, CONFIG.CANVAS_H); break;
-    case 2: x = -cfg.radius - 5; y = randInt(0, CONFIG.CANVAS_H); break;
+    case 1: x = CONFIG.CANVAS_W + cfg.radius + 5; y = randInt(0, CONFIG.CANVAS_H * 0.5); break;
+    case 2: x = -cfg.radius - 5; y = randInt(0, CONFIG.CANVAS_H * 0.5); break;
   }
 
   return {
@@ -642,6 +652,19 @@ bgSelect.addEventListener('change', (e) => {
   game.currentBg = e.target.value;
 });
 
+// v6: 新游戏按钮
+document.getElementById('newGameBtn').addEventListener('click', () => {
+  initAudio();
+  game.state = STATE.PLAYING;
+  enterPlaying();
+});
+
+// v6: Debug toggle
+document.getElementById('debugToggle').addEventListener('change', (e) => {
+  game.debugMode = e.target.checked;
+  if (game.debugMode) game.power = 5;
+});
+
 // ================================================================
 //  九、游戏逻辑更新（每帧调用）
 // ================================================================
@@ -684,7 +707,7 @@ function autoFire(now) {
   if (game.enemies.length === 0) return;
 
   // 找最近的 N 个敌人（按距离排序）
-  const subCount = Math.min(CONFIG.MAX_SUB_BULLETS, Math.floor(game.power));
+  const subCount = Math.min(CONFIG.MAX_SUB_BULLETS, Math.floor(game.debugMode ? 5 : game.power));
   const totalNeeded = 1 + subCount;
   const sortedEnemies = [...game.enemies].sort((a, b) => {
     const da = dist(p.x, p.y, a.x, a.y);
