@@ -147,3 +147,49 @@
 ### 修复方法
 1. 下落阶段也朝屏幕中心横向移动：`e.x += (canvasCenterX - e.x) * 0.02 * e.speed`
 2. 修复重复的 `e.y += e.speed`，合并为单一下落逻辑
+
+---
+
+## BUG-007: 小 boss (mini_boss) 永不出场
+**报告日期**: 2026-06-07
+**状态**: 已修复
+
+### 现象
+分数超过 1500 后小 boss 不出现。
+
+### 根因
+`ENEMY_TYPES.mini_boss.prob = 0`，随机生成永远选不到小 boss。大 boss 有独立的强制出场逻辑（score>=1800），小 boss 没有。
+
+### 修复方法
+`mini_boss.prob` 从 `0` 改为 `0.05`。
+
+---
+
+## CHANGE-014: 移除 +0.1 POWER 浮动提示
+**状态**: 已实现
+**方法**: `onEnemyKilled()` 中删除 `bonusMessages.push({ text: '+0.1 POWER' })`，保留 power 增加和音效。
+
+## CHANGE-015: Bomb 视觉改善 — 移除全屏白屏 + 灵梦显示范围圈
+**状态**: 已实现
+**方法**:
+- 移除 `drawBombEffect()` 中 300ms 全屏白色遮罩
+- 移除无意义的扩散光环
+- 灵梦 bomb 显示脉冲圆圈（半径 200），半透明填充 + 橙色描边
+- 魔理沙、早苗范围显示不变
+- BOMB! 文字颜色改为金色
+
+## CHANGE-016: 新增难度选择器 (Easy / Normal / Hard / Lunatic)
+**状态**: 已实现
+**方法**:
+- HTML 新增 `<select id="diffSelect">` 四种选项
+- `game.difficulty` 字段，默认 `'normal'`
+- `getCurrentSpawnInterval()` 按难度系数调整：Easy×2.0 / Normal×1.0 / Hard×0.6 / Lunatic×0.4
+
+## CHANGE-017: 重构敌人射击逻辑（按类型不同）
+**状态**: 已实现
+**方法**:
+- 毛玉(fuzzy): 120帧间隔，1弹，只向下
+- 蝴蝶(butterfly): 120帧间隔，1弹，50%向下/50%瞄准玩家
+- 乌鸦(crow): 80帧间隔（1.5×毛玉），1弹，瞄准玩家附近带±0.25随机偏移
+- 小boss(mini_boss): 40帧间隔（3×毛玉），1弹，瞄准玩家附近带随机偏移
+- 大boss(big_boss): 80帧间隔，同上

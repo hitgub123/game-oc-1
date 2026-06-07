@@ -66,6 +66,13 @@
     <label style="color: #ccaa88; font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
       <input type="checkbox" id="debugToggle" checked> Debug
     </label>
+    <label style="color: #ccaa88; font-size: 13px;">难度：</label>
+    <select id="diffSelect" style="background: #1a1a2e; color: #ccaa88; border: 1px solid #cc8866; border-radius: 4px; padding: 2px 6px; font-size: 13px;">
+      <option value="easy">Easy</option>
+      <option value="normal" selected>Normal</option>
+      <option value="hard">Hard</option>
+      <option value="lunatic">Lunatic</option>
+    </select>
   </div>
 </div>
 
@@ -293,7 +300,7 @@ const ENEMY_TYPES = {
   fuzzy:     { color: '#33dd55', stroke: '#88ff88', hp: 1,  speedMult: 1.0, radius: 10, prob: 0.50 },
   butterfly: { color: '#cc66ff', stroke: '#ff99ff', hp: 1,  speedMult: 1.6, radius: 10, prob: 0.25 },
   crow:      { color: '#222233', stroke: '#666666', hp: 2,  speedMult: 1.4, radius: 12, prob: 0.20 },
-  mini_boss: { color: '#ffaa00', stroke: '#ffddaa', hp: 10, speedMult: 0.3, radius: 24, prob: 0 },
+  mini_boss: { color: '#ffaa00', stroke: '#ffddaa', hp: 10, speedMult: 0.3, radius: 24, prob: 0.05 },
   big_boss:  { color: '#cc2233', stroke: '#ffddaa', hp: 100,speedMult: 0.2, radius: 40, prob: 0 },
 };
 
@@ -379,6 +386,9 @@ const game = {
   // --- v7: 角色选择 ---
   currentChar: 'reimu',
 
+  // --- v12: 难度选择 ---
+  difficulty: 'normal',
+
   // --- v7: 辅助子机 ---
   companions: [],
 
@@ -412,12 +422,14 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-/** v3.2: 根据游戏已用时间计算当前敌人生成间隔（线性渐变） */
+/** v3.2: 根据游戏已用时间计算当前敌人生成间隔（线性渐变），难度系数调整 */
 function getCurrentSpawnInterval() {
   if (!game.startTime) return CONFIG.ENEMY_SPAWN_INTERVAL_MAX;
-  const elapsed = (performance.now() - game.startTime) / 1000; // 秒
+  const elapsed = (performance.now() - game.startTime) / 1000;
   const t = Math.min(elapsed / CONFIG.ENEMY_SPAWN_RAMP_DURATION, 1);
-  return CONFIG.ENEMY_SPAWN_INTERVAL_MAX - t * (CONFIG.ENEMY_SPAWN_INTERVAL_MAX - CONFIG.ENEMY_SPAWN_INTERVAL_MIN);
+  const base = CONFIG.ENEMY_SPAWN_INTERVAL_MAX - t * (CONFIG.ENEMY_SPAWN_INTERVAL_MAX - CONFIG.ENEMY_SPAWN_INTERVAL_MIN);
+  const diffMult = { easy: 2.0, normal: 1.0, hard: 0.6, lunatic: 0.4 }[game.difficulty] || 1.0;
+  return base * diffMult;
 }
 
 // ================================================================
@@ -688,7 +700,11 @@ document.getElementById('newGameBtn').addEventListener('click', () => {
   enterPlaying();
 });
 
-// v6: Debug toggle
+// v12: 难度选择
+const diffSelect = document.getElementById('diffSelect');
+diffSelect.addEventListener('change', (e) => {
+  game.difficulty = e.target.value;
+});
 document.getElementById('debugToggle').addEventListener('change', (e) => {
   game.debugMode = e.target.checked;
   if (game.debugMode) game.power = 5;
@@ -937,23 +953,43 @@ function updateEnemies() {
       e.x += Math.sin(e.phase) * 1.8;
     }
 
-    // 敌人射击
+    // 敌人射击 — 按类型不同频率和瞄准方式
     e.shootTimer++;
-    if (e.shootTimer >= 120) {
+    const fireIntervals = {
+      fuzzy: 120,
+      butterfly: 120,
+      crow: 80,       // 1.5x fuzzy rate (120/1.5=80)
+      mini_boss: 40,  // 3x fuzzy rate (120/3=40)
+      big_boss: 80,
+    };
+    const interval = fireIntervals[e.type] || 120;
+    if (e.shootTimer >= interval) {
       e.shootTimer = 0;
+      const p = game.player;
       let angle;
-      // 毛玉和蝴蝶只往下射击
-      if (e.type === 'fuzzy' || e.type === 'butterfly') {
-        angle = Math.PI / 2; // 向下
-      } else {
-        // 其他敌人朝玩家方向射击
-        const p = game.player;
-        if (p) {
+
+      if (e.type === 'fuzzy') {
+        // 毛玉：一颗子弹，只往下
+        angle = Math.PI / 2;
+      } else if (e.type === 'butterfly') {
+        // 蝴蝶：一颗子弹，50% 向下，50% 瞄准玩家
+        if (Math.random() < 0.5 && p) {
           angle = Math.atan2(p.y - e.y, p.x - e.x);
         } else {
           angle = Math.PI / 2;
         }
+      } else if (e.type === 'crow' || e.type === 'mini_boss' || e.type === 'big_boss') {
+        // 乌鸦/小boss/大boss：一颗子弹，瞄准玩家附近（带随机偏移）
+        if (p) {
+          const baseAngle = Math.atan2(p.y - e.y, p.x - e.x);
+          angle = baseAngle + (Math.random() - 0.5) * 0.5;
+        } else {
+          angle = Math.PI / 2;
+        }
+      } else {
+        angle = Math.PI / 2;
       }
+
       game.enemyBullets.push({
         x: e.x, y: e.y,
         vx: Math.cos(angle) * 3,
@@ -1064,10 +1100,6 @@ function onEnemyKilled(enemy) {
   if (enemy.type === 'big_boss') return;
   if (enemy.type !== 'mini_boss' && Math.random() < CONFIG.POWER_ITEM_DROP_RATE) {
     game.power = Math.min(CONFIG.MAX_POWER, game.power + CONFIG.POWER_PER_ITEM);
-    game.bonusMessages.push({
-      text: '+0.1 POWER',
-      startTime: performance.now(),
-    });
     playSound('power');
   }
 }
@@ -2244,34 +2276,23 @@ function drawBombEffect() {
   const duration = Math.max(1, game.bombEndTime - game.bombAnimStartTime);
   const progress = Math.min(elapsed / duration, 1);
 
-  // 白闪（前 300ms）
-  if (progress < 0.3) {
-    const flashAlpha = (1 - progress / 0.3) * 0.5;
-    ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
-    ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.CANVAS_H);
-  }
-
-  // 扩散光环
-  const ringRadius = Math.max(0, progress * 400);
-  const ringAlpha = Math.max(0, (1 - progress) * 0.4);
-  ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, ringRadius, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // "BOMB!" 文字
-  if (progress < 0.5) {
-    const textAlpha = Math.max(0, 1 - progress / 0.5);
-    ctx.fillStyle = `rgba(255, 255, 255, ${textAlpha})`;
-    ctx.font = 'bold 48px "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('BOMB!', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2);
+  // 灵梦：显示圆形范围区域（半径200）
+  if (game.bombType === 'reimu' && p) {
+    const pulse = 1 + Math.sin(elapsed * 0.01) * 0.1;
+    const r = 200 * pulse;
+    ctx.fillStyle = 'rgba(255, 150, 50, 0.08)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 100, 30, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   // 魔理沙：显示前方范围
-  if (game.bombType === 'marisa') {
+  if (game.bombType === 'marisa' && p) {
     const range = CONFIG.CANVAS_W / 3;
     ctx.fillStyle = 'rgba(100, 200, 255, 0.1)';
     ctx.fillRect(p.x - range / 2, 0, range, p.y);
@@ -2288,6 +2309,16 @@ function drawBombEffect() {
     ctx.beginPath();
     ctx.arc(CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2, expandRadius, 0, Math.PI * 2);
     ctx.stroke();
+  }
+
+  // "BOMB!" 文字
+  if (progress < 0.5) {
+    const textAlpha = Math.max(0, 1 - progress / 0.5);
+    ctx.fillStyle = `rgba(255, 200, 50, ${textAlpha})`;
+    ctx.font = 'bold 48px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BOMB!', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2);
   }
 }
 
