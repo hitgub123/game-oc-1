@@ -431,7 +431,7 @@ function getCurrentSpawnInterval() {
 function createPlayer() {
   return {
     x: CONFIG.CANVAS_W / 2,
-    y: CONFIG.CANVAS_H / 2,
+    y: CONFIG.CANVAS_H - 60,
     radius: CONFIG.PLAYER_RADIUS,
     hp: CONFIG.PLAYER_MAX_HP,
     maxHp: CONFIG.PLAYER_MAX_HP,
@@ -480,13 +480,13 @@ function createEnemy() {
 
   const cfg = ENEMY_TYPES[type];
 
-  // 从边缘生成（上/右/左）
+  // 从边缘生成，左右只在上半屏
   const side = randInt(0, 3);
   let x, y;
   switch (side) {
     case 0: x = randInt(0, CONFIG.CANVAS_W); y = -cfg.radius - 5; break;
-    case 1: x = CONFIG.CANVAS_W + cfg.radius + 5; y = randInt(0, CONFIG.CANVAS_H); break;
-    case 2: x = -cfg.radius - 5; y = randInt(0, CONFIG.CANVAS_H); break;
+    case 1: x = CONFIG.CANVAS_W + cfg.radius + 5; y = randInt(0, CONFIG.CANVAS_H * 0.4); break;
+    case 2: x = -cfg.radius - 5; y = randInt(0, CONFIG.CANVAS_H * 0.4); break;
   }
 
   return {
@@ -496,6 +496,8 @@ function createEnemy() {
     phase: Math.random() * Math.PI * 2,
     hitFlash: 0,
     shootTimer: 0,
+    walkDir: Math.random() > 0.5 ? 1 : -1,
+    isBoss: type === 'big_boss',
   };
 }
 
@@ -907,27 +909,32 @@ function autoFire(now) {
  * 更新敌人 — 母敌人巡逻+射击，子敌人下半屏
  */
 function updateEnemies() {
-  const p = game.player;
-  if (!p) return;
-
   for (let i = game.enemies.length - 1; i >= 0; i--) {
     const e = game.enemies[i];
 
-    // 朝玩家移动
-    const dx = p.x - e.x;
-    const dy = p.y - e.y;
-    const d = dist(0, 0, dx, dy);
-    if (d > 0.1) {
-      e.vx = (dx / d) * e.speed;
-      e.vy = (dy / d) * e.speed;
+    // 所有敌人在上半屏来回移动，不靠近玩家
+    const upperBound = CONFIG.CANVAS_H * 0.5;
+    if (e.y < upperBound) {
+      // 还没到上半屏下界，向下移动
+      e.y += e.speed;
     } else {
-      e.vx = 0;
-      e.vy = 0;
+      // 到达上半屏下界，改为左右移动
+      e.y = Math.min(e.y, upperBound);
+      // 横向来回巡逻
+      if (!e.walkDir) e.walkDir = Math.random() > 0.5 ? 1 : -1;
+      e.x += e.walkDir * e.speed;
+      // 碰壁换方向
+      if (e.x < 20 || e.x > CONFIG.CANVAS_W - 20) {
+        e.walkDir *= -1;
+      }
     }
-    e.x += e.vx;
-    e.y += e.vy;
 
-    // 蝴蝶：横向摆动
+    // 进入上半屏前可以慢速向下，之后停止纵向移动
+    if (e.y < upperBound) {
+      e.y += e.speed;
+    }
+
+    // 蝴蝶：横向摆动叠加
     if (e.type === 'butterfly') {
       e.phase += 0.06;
       e.x += Math.sin(e.phase) * 1.8;
@@ -935,10 +942,21 @@ function updateEnemies() {
 
     // 敌人射击
     e.shootTimer++;
-    if (e.shootTimer >= 120) {  // 每2秒射击一次
+    if (e.shootTimer >= 120) {
       e.shootTimer = 0;
-      // 朝玩家发射子弹
-      const angle = Math.atan2(p.y - e.y, p.x - e.x);
+      let angle;
+      // 毛玉和蝴蝶只往下射击
+      if (e.type === 'fuzzy' || e.type === 'butterfly') {
+        angle = Math.PI / 2; // 向下
+      } else {
+        // 其他敌人朝玩家方向射击
+        const p = game.player;
+        if (p) {
+          angle = Math.atan2(p.y - e.y, p.x - e.x);
+        } else {
+          angle = Math.PI / 2;
+        }
+      }
       game.enemyBullets.push({
         x: e.x, y: e.y,
         vx: Math.cos(angle) * 3,
@@ -953,8 +971,8 @@ function updateEnemies() {
     // 受击闪烁递减
     if (e.hitFlash > 0) e.hitFlash--;
 
-    // 出屏移除
-    if (e.y > CONFIG.CANVAS_H + 50 || e.x < -50 || e.x > CONFIG.CANVAS_W + 50 || e.y < -50) {
+    // 出屏移除（只移除横向出屏的，纵向的上半屏内保留）
+    if (e.x < -50 || e.x > CONFIG.CANVAS_W + 50) {
       game.enemies.splice(i, 1);
     }
   }
@@ -1044,16 +1062,14 @@ function updateParticles() {
  * 敌人被击杀时 — 概率直接 +0.1 Power（v3.3：不生成道具）
  */
 function onEnemyKilled(enemy) {
-  // 大 boss 和子敌人不掉落 power
+  // 大 boss 不掉落 power
   if (enemy.type === 'big_boss') return;
-  // v3.3: 道具不再生成，直接 +0.1 power
   if (enemy.type !== 'mini_boss' && Math.random() < CONFIG.POWER_ITEM_DROP_RATE) {
     game.power = Math.min(CONFIG.MAX_POWER, game.power + CONFIG.POWER_PER_ITEM);
     game.bonusMessages.push({
       text: '+0.1 POWER',
       startTime: performance.now(),
     });
-    createExplosion(enemy.x, enemy.y, '#ffcc44', 6);
     playSound('power');
   }
 }
@@ -2031,9 +2047,10 @@ function useBomb() {
 
   // 根据角色设置 bomb 持续时间和类型
   const now = performance.now();
+  const p = game.player;
   switch (game.currentChar) {
     case 'reimu':
-      game.bombEndTime = now + 9000;  // 9 秒
+      game.bombEndTime = now + 7000;  // 7 秒
       game.bombType = 'reimu';
       break;
     case 'marisa':
@@ -2046,9 +2063,31 @@ function useBomb() {
       break;
   }
 
-  // 玩家无敌 + 金色
-  if (game.player) {
-    game.player.invincibleUntil = game.bombEndTime;
+  // 玩家无敌
+  if (p) {
+    p.invincibleUntil = game.bombEndTime;
+  }
+
+  // 清空范围内的敌人子弹
+  if (p) {
+    for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
+      const b = game.enemyBullets[i];
+      let inRange = false;
+      if (game.currentChar === 'sanae') {
+        inRange = true; // 全屏
+      } else if (game.currentChar === 'reimu') {
+        // 自身周围圆形范围（半径200）
+        if (dist(p.x, p.y, b.x, b.y) < 200) inRange = true;
+      } else if (game.currentChar === 'marisa') {
+        // 前方矩形范围
+        const range = CONFIG.CANVAS_W / 3;
+        if (b.y < p.y && Math.abs(b.x - p.x) < range / 2) inRange = true;
+      }
+      if (inRange) {
+        createExplosion(b.x, b.y, '#ffcc44', 4);
+        game.enemyBullets.splice(i, 1);
+      }
+    }
   }
 
   playSound('bomb');
@@ -2092,27 +2131,60 @@ function updateBombEffect() {
   // 每秒造成伤害
   if (now - game.bombDamageTimer >= 1000) {
     game.bombDamageTimer = now;
-    
-    if (game.bombType === 'sanae') {
+
+    if (game.bombType === 'reimu') {
+      // 灵梦：自身周围圆形范围（半径200），每秒1伤害
+      const p = game.player;
+      if (p) {
+        for (let i = game.enemies.length - 1; i >= 0; i--) {
+          const e = game.enemies[i];
+          if (dist(p.x, p.y, e.x, e.y) < 200) {
+            e.hp -= 1;
+            if (e.hp <= 0) {
+              const baseScore = ENEMY_SCORES[e.type] || 1;
+              game.score += baseScore;
+              createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
+              onEnemyKilled(e);
+              game.enemies.splice(i, 1);
+            }
+          }
+        }
+        // 连续清除范围内的敌人子弹
+        for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
+          const b = game.enemyBullets[i];
+          if (dist(p.x, p.y, b.x, b.y) < 200) {
+            createExplosion(b.x, b.y, '#ffcc44', 3);
+            game.enemyBullets.splice(i, 1);
+          }
+        }
+      }
+    } else if (game.bombType === 'sanae') {
       // 早苗：全屏爆炸，每秒 1 点
-      for (const e of game.enemies) {
+      for (let i = game.enemies.length - 1; i >= 0; i--) {
+        const e = game.enemies[i];
         e.hp -= 1;
         if (e.hp <= 0) {
           const baseScore = ENEMY_SCORES[e.type] || 1;
           game.score += baseScore;
           createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
           onEnemyKilled(e);
-          game.enemies.splice(game.enemies.indexOf(e), 1);
+          game.enemies.splice(i, 1);
         }
       }
       // 全屏爆炸特效
       createExplosion(CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2, '#88ff88', 30);
+      // 全屏清除敌人子弹
+      for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
+        createExplosion(game.enemyBullets[i].x, game.enemyBullets[i].y, '#ffcc44', 3);
+      }
+      game.enemyBullets = [];
     } else if (game.bombType === 'marisa') {
       // 魔理沙：前方 1/3 屏幕范围伤害
       const range = CONFIG.CANVAS_W / 3;
       const px = game.player.x;
       const py = game.player.y;
-      for (const e of game.enemies) {
+      for (let i = game.enemies.length - 1; i >= 0; i--) {
+        const e = game.enemies[i];
         if (e.y < py && Math.abs(e.x - px) < range / 2) {
           e.hp -= 1;
           if (e.hp <= 0) {
@@ -2120,12 +2192,19 @@ function updateBombEffect() {
             game.score += baseScore;
             createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
             onEnemyKilled(e);
-            game.enemies.splice(game.enemies.indexOf(e), 1);
+            game.enemies.splice(i, 1);
           }
         }
       }
+      // 清除前方范围内的敌人子弹
+      for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
+        const b = game.enemyBullets[i];
+        if (b.y < py && Math.abs(b.x - px) < range / 2) {
+          createExplosion(b.x, b.y, '#ffcc44', 3);
+          game.enemyBullets.splice(i, 1);
+        }
+      }
     }
-    // 灵梦：只是持续 9 秒，子弹 ×3 在 autoFire 中处理
   }
 }
 
@@ -2347,6 +2426,23 @@ function gameLoop(timestamp) {
         game.enemies.push(createEnemy());
       }
       game.lastSpawnTime = now;
+    }
+
+    // 大 boss 强制出场（prob=0 无法随机生成）
+    if (game.score >= 1800 && !game.bigBossSpawned) {
+      const boss = createEnemy();
+      boss.type = 'big_boss';
+      const cfg = ENEMY_TYPES.big_boss;
+      boss.hp = cfg.hp;
+      boss.maxHp = cfg.hp;
+      boss.radius = cfg.radius;
+      boss.speed = CONFIG.ENEMY_SPEED * cfg.speedMult;
+      boss.isBoss = true;
+      // 从正上方出现
+      boss.x = CONFIG.CANVAS_W / 2;
+      boss.y = -cfg.radius - 10;
+      game.enemies.push(boss);
+      game.bigBossSpawned = true;
     }
 
     updatePlayer();
