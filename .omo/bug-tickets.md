@@ -218,16 +218,20 @@
 **状态**: 已实现
 **方法**: `createEnemy()` 新增 `targetX` 字段（randInt(60, W-60)），`updateEnemies()` 下落阶段趋近 `targetX` 而非屏幕中心，避免敌人全聚集中间区域导致弹幕密集。
 
-## CHANGE-020: Bomb 伤害改为 0.1s 频率（0.1hp/次）+ 弹幕清除同步
-**状态**: 已实现
+## CHANGE-020: Bomb 伤害频率改为 0.2s（0.2hp/次）+ 弹幕清除同步
+**状态**: 已实现（频率从 0.1s 调整为 0.2s）
 **方法**:
-- `updateBombEffect` 中 `bombDamageTimer` 间隔从 1000ms 改为 100ms
-- 每次伤害从 `e.hp -= 1` 改为 `e.hp -= 0.1`
+- `updateBombEffect` 中 `bombDamageTimer` 间隔从 1000ms → 100ms → 200ms
+- 每次伤害从 `e.hp -= 1` → `e.hp -= 0.1` → `e.hp -= 0.2`
 - 敌人子弹清除也从每 1s 改为每 0.1s（灵梦/魔理沙范围内，早苗全屏）
 
-## CHANGE-021: 魔理沙激光保持常亮
+## CHANGE-021: 魔理沙激光保持常亮 + 伤害修正
 **状态**: 已实现
-**方法**: 激光 `life` 和 `maxLife` 从 30 改为 65（≥射击间隔 60 帧），确保激光持续不断。
+**方法**:
+- `drawLasers()` alpha 改为常量 0.8（不再随 life 渐变，解决闪烁）
+- 碰撞检测从每帧 60 点逐点判定改为每敌人一次点-线段距离判定，避免叠加
+- 每次伤害从 `damage * 0.1` 改为 `damage * 0.05`（约 3 DPS，不再秒杀 boss）
+- 激光 life 从 30 → 70
 
 ## CHANGE-022: 灵梦 bomb 期间子弹不再翻倍
 **状态**: 已实现

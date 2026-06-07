@@ -797,31 +797,38 @@ function updateLasers() {
 
 function drawLasers() {
   for (const l of game.lasers) {
-    const alpha = l.life / l.maxLife;
-    ctx.strokeStyle = `rgba(100, 200, 255, ${alpha * 0.8})`;
+    // 常亮显示，不使用 alpha 渐变
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.8)';
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(l.x, l.y);
     ctx.lineTo(l.x + Math.cos(l.angle) * l.length, l.y + Math.sin(l.angle) * l.length);
     ctx.stroke();
 
-    // 激光碰撞检测 - 检查激光路径上的点
-    const steps = Math.floor(l.length / 10);
-    for (let s = 0; s < steps; s++) {
-      const t = s / steps;
-      const lx = l.x + Math.cos(l.angle) * l.length * t;
-      const ly = l.y + Math.sin(l.angle) * l.length * t;
-      
-      for (const e of game.enemies) {
-        if (dist(lx, ly, e.x, e.y) < e.radius + 5) {
-          e.hp -= l.damage * 0.1;
-          if (e.hp <= 0) {
-            const baseScore = ENEMY_SCORES[e.type] || 1;
-            game.score += baseScore;
-            createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
-            onEnemyKilled(e);
-            game.enemies.splice(game.enemies.indexOf(e), 1);
-          }
+    // 激光碰撞检测 — 每帧对路径上每个敌人只伤害一次（不按步骤叠加）
+    const enemiesHit = new Set();
+    for (const e of game.enemies) {
+      if (enemiesHit.has(e)) continue;
+      // 检查敌人圆心到激光线段的距离
+      const lx = l.x, ly = l.y;
+      const ex = l.x + Math.cos(l.angle) * l.length;
+      const ey = l.y + Math.sin(l.angle) * l.length;
+      // 点到线段距离
+      const dx = ex - lx, dy = ey - ly;
+      const len2 = dx * dx + dy * dy;
+      let t = ((e.x - lx) * dx + (e.y - ly) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const closestX = lx + t * dx;
+      const closestY = ly + t * dy;
+      if (dist(e.x, e.y, closestX, closestY) < e.radius + 5) {
+        enemiesHit.add(e);
+        e.hp -= l.damage * 0.05;  // 每帧 0.05 伤害 (≈3 DPS)
+        if (e.hp <= 0) {
+          const baseScore = ENEMY_SCORES[e.type] || 1;
+          game.score += baseScore;
+          createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
+          onEnemyKilled(e);
+          game.enemies.splice(game.enemies.indexOf(e), 1);
         }
       }
     }
@@ -881,8 +888,8 @@ function autoFire(now) {
           angle: -Math.PI / 2,
           length: CONFIG.CANVAS_H,
           damage: CONFIG.SUB_BULLET_DMG * 2,
-          life: 65,
-          maxLife: 65,
+          life: 70,
+          maxLife: 70,
         });
       }
     }
@@ -2149,7 +2156,7 @@ function convertPowerToBomb() {
 }
 
 /**
- * v8: 持续 bomb 效果 — 每 0.1s 造成 0.1 伤害
+ * v8: 持续 bomb 效果 — 每 0.2s 造成 0.2 伤害
  */
 function updateBombEffect() {
   if (!game.isBombActive) return;
@@ -2165,10 +2172,10 @@ function updateBombEffect() {
     return;
   }
   
-  // 每 0.1 秒造成 0.1 伤害；同步清除范围内敌人子弹
-  if (now - game.bombDamageTimer >= 100) {
+  // 每 0.2 秒造成 0.2 伤害；同步清除范围内敌人子弹
+  if (now - game.bombDamageTimer >= 200) {
     game.bombDamageTimer = now;
-    const dmg = 0.1;
+    const dmg = 0.2;
 
     if (game.bombType === 'reimu') {
       const p = game.player;
