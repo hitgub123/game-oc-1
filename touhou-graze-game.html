@@ -64,7 +64,7 @@
     </select>
     <button id="newGameBtn" style="background: #cc8866; color: #fff; border: none; border-radius: 6px; padding: 6px 18px; font-size: 14px; cursor: pointer; font-weight: bold;">新游戏</button>
     <label style="color: #ccaa88; font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
-      <input type="checkbox" id="debugToggle"> Debug
+      <input type="checkbox" id="debugToggle" checked> Debug
     </label>
   </div>
 </div>
@@ -313,8 +313,9 @@ const ENEMY_TYPES = {
 const STATE = {
   LOADING:   'LOADING',
   PLAYING:   'PLAYING',
+  PAUSED:    'PAUSED',
   GAME_OVER: 'GAME_OVER',
-  CLEAR:     'CLEAR',     // v2 新增通关状态
+  CLEAR:     'CLEAR',
 };
 
 // ================================================================
@@ -498,8 +499,8 @@ function createEnemy() {
   };
 }
 
-// v4: 5 种副子弹颜色
-const SUB_COLORS = ['#44aaff', '#00cccc', '#44ff44', '#ffcc44', '#cc44ff', '#ff4444'];
+// v4: 5 种副子弹颜色（不含黄色，区分敌人子弹）
+const SUB_COLORS = ['#44aaff', '#00cccc', '#44ff44', '#cc44ff', '#ff6666', '#ff8800'];
 
 /**
  * 创建子弹（v3: 主/副分离，isMain 参数；v4: subIndex 对应颜色）
@@ -548,7 +549,7 @@ function enterPlaying() {
   game.score = 0;
   game.lives = CONFIG.INITIAL_LIVES;
   game.bombs = CONFIG.INITIAL_BOMBS;
-  game.power = 0;
+  game.power = game.debugMode ? 5 : 0;
   game.scoreForNextLife = CONFIG.SCORE_FOR_LIFE;
   game.scoreForNextBomb = CONFIG.SCORE_FOR_BOMB;
   game.isBombActive = false;
@@ -644,8 +645,17 @@ document.addEventListener('keydown', (e) => {
     useBomb();
   }
 
-  // GAME_OVER / CLEAR 下按 R 重开
-  if (key === 'r' && (game.state === STATE.GAME_OVER || game.state === STATE.CLEAR)) {
+  // ESC：暂停/继续
+  if (key === 'escape') {
+    if (game.state === STATE.PLAYING) {
+      game.state = STATE.PAUSED;
+    } else if (game.state === STATE.PAUSED) {
+      game.state = STATE.PLAYING;
+    }
+  }
+
+  // GAME_OVER / CLEAR / PAUSED 下按 R 重开
+  if (key === 'r' && (game.state === STATE.GAME_OVER || game.state === STATE.CLEAR || game.state === STATE.PAUSED)) {
     game.state = STATE.PLAYING;
     enterPlaying();
   }
@@ -833,14 +843,24 @@ function autoFire(now) {
 
   // 根据角色发射不同副子弹
   if (game.currentChar === 'reimu') {
-    // 灵梦：子机发射普通副子弹（同现在）
+    // 灵梦：从辅助子机发射追踪副子弹
     for (let i = 0; i < subCount; i++) {
+      const c = game.companions[i];
+      if (!c) continue;
       const target = sortedEnemies[i + 1] || sortedEnemies[0];
       if (target) {
-        const angle = Math.atan2(target.y - p.y, target.x - p.x);
-        game.bullets.push(createBullet(angle, false, i));
-      } else {
-        game.bullets.push(createBullet(-Math.PI / 2, false, i));
+        const angle = Math.atan2(target.y - c.y, target.x - c.x);
+        const speed = CONFIG.SUB_BULLET_SPEED;
+        game.bullets.push({
+          x: c.x, y: c.y,
+          radius: CONFIG.SUB_BULLET_RADIUS,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: CONFIG.BULLET_LIFE,
+          damage: CONFIG.SUB_BULLET_DMG,
+          isMain: false,
+          color: SUB_COLORS[i % SUB_COLORS.length],
+        });
       }
     }
   } else if (game.currentChar === 'marisa') {
@@ -850,40 +870,31 @@ function autoFire(now) {
       if (c) {
         game.lasers.push({
           x: c.x, y: c.y,
-          angle: -Math.PI / 2,  // 向上
-          length: CONFIG.CANVAS_H,  // 延伸到屏幕顶部
-          damage: CONFIG.SUB_BULLET_DMG * 2,  // 1点伤害/秒
-          life: 30,  // 0.5秒
+          angle: -Math.PI / 2,
+          length: CONFIG.CANVAS_H,
+          damage: CONFIG.SUB_BULLET_DMG * 2,
+          life: 30,
           maxLife: 30,
         });
       }
     }
   } else if (game.currentChar === 'sanae') {
-    // 早苗：扇形2发，无跟踪
+    // 早苗：V字形扇形弹道，无跟踪
     for (let i = 0; i < subCount; i++) {
       const c = game.companions[i];
       if (c) {
-        const baseAngle = -Math.PI / 2;
-        const spread = 0.4;  // 扇形角度
-        game.bullets.push({
-          x: c.x, y: c.y,
-          radius: CONFIG.SUB_BULLET_RADIUS,
-          vx: Math.cos(baseAngle - spread) * CONFIG.BULLET_SPEED,
-          vy: Math.sin(baseAngle - spread) * CONFIG.BULLET_SPEED,
-          life: CONFIG.BULLET_LIFE,
-          damage: CONFIG.SUB_BULLET_DMG,
-          isMain: false,
-          color: SUB_COLORS[i % SUB_COLORS.length],
-        });
-        game.bullets.push({
-          x: c.x, y: c.y,
-          radius: CONFIG.SUB_BULLET_RADIUS,
-          vx: Math.cos(baseAngle + spread) * CONFIG.BULLET_SPEED,
-          vy: Math.sin(baseAngle + spread) * CONFIG.BULLET_SPEED,
-          life: CONFIG.BULLET_LIFE,
-          damage: CONFIG.SUB_BULLET_DMG,
-          isMain: false,
-          color: SUB_COLORS[i % SUB_COLORS.length],
+        const spread = 0.5;
+        [ -spread, spread ].forEach((angleOffset) => {
+          game.bullets.push({
+            x: c.x, y: c.y,
+            radius: CONFIG.SUB_BULLET_RADIUS,
+            vx: Math.sin(angleOffset) * CONFIG.BULLET_SPEED,
+            vy: -Math.cos(angleOffset) * CONFIG.BULLET_SPEED,
+            life: CONFIG.BULLET_LIFE,
+            damage: CONFIG.SUB_BULLET_DMG,
+            isMain: false,
+            color: SUB_COLORS[i % SUB_COLORS.length],
+          });
         });
       }
     }
@@ -933,7 +944,7 @@ function updateEnemies() {
         vx: Math.cos(angle) * 3,
         vy: Math.sin(angle) * 3,
         radius: 4,
-        color: '#ff6666',
+        color: '#ffcc00',
         life: 180,
       });
       playSound('shoot');
@@ -2071,6 +2082,10 @@ function updateBombEffect() {
   if (now >= game.bombEndTime) {
     game.isBombActive = false;
     game.bombType = null;
+    // bomb结束后额外1秒无敌
+    if (game.player) {
+      game.player.invincibleUntil = Math.max(game.player.invincibleUntil, now + 1000);
+    }
     return;
   }
   
@@ -2149,7 +2164,7 @@ function drawBombEffect() {
 
   const now = performance.now();
   const elapsed = now - game.bombAnimStartTime;
-  const duration = game.bombEndTime - game.bombAnimStartTime;
+  const duration = Math.max(1, game.bombEndTime - game.bombAnimStartTime);
   const progress = Math.min(elapsed / duration, 1);
 
   // 白闪（前 300ms）
@@ -2160,8 +2175,8 @@ function drawBombEffect() {
   }
 
   // 扩散光环
-  const ringRadius = progress * 400;
-  const ringAlpha = (1 - progress) * 0.4;
+  const ringRadius = Math.max(0, progress * 400);
+  const ringAlpha = Math.max(0, (1 - progress) * 0.4);
   ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
   ctx.lineWidth = 3;
   ctx.beginPath();
@@ -2170,7 +2185,7 @@ function drawBombEffect() {
 
   // "BOMB!" 文字
   if (progress < 0.5) {
-    const textAlpha = 1 - progress / 0.5;
+    const textAlpha = Math.max(0, 1 - progress / 0.5);
     ctx.fillStyle = `rgba(255, 255, 255, ${textAlpha})`;
     ctx.font = 'bold 48px "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
@@ -2190,7 +2205,7 @@ function drawBombEffect() {
 
   // 早苗：显示全屏爆炸圈
   if (game.bombType === 'sanae') {
-    const expandRadius = (elapsed % 1000) / 1000 * CONFIG.CANVAS_W;
+    const expandRadius = Math.max(0, ((elapsed % 1000) / 1000) * CONFIG.CANVAS_W);
     ctx.strokeStyle = 'rgba(100, 255, 100, 0.5)';
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -2374,6 +2389,18 @@ function gameLoop(timestamp) {
     drawGameOver();
   } else if (game.state === STATE.CLEAR) {
     drawClear();
+  } else if (game.state === STATE.PAUSED) {
+    // 暂停遮罩
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, CONFIG.CANVAS_W, CONFIG.CANVAS_H);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 36px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('⏸ 暂停', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2);
+    ctx.fillStyle = '#ccaa88';
+    ctx.font = '16px "Segoe UI", sans-serif';
+    ctx.fillText('按 ESC 继续', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2 + 40);
   }
 
   // ---- 步骤 5: 状态栏 ----
@@ -2388,6 +2415,11 @@ function gameLoop(timestamp) {
 // ================================================================
 
 game._fpsLastTime = performance.now();
+// 初始化 debug 模式（默认开启）
+if (document.getElementById('debugToggle').checked) {
+  game.debugMode = true;
+  game.power = 5;
+}
 requestAnimationFrame(gameLoop);
 
 console.log('🎮 东方Project 割草游戏 v3 已启动！');
