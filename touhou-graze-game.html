@@ -301,7 +301,7 @@ const ENEMY_TYPES = {
   butterfly: { color: '#cc66ff', stroke: '#ff99ff', hp: 1,  speedMult: 1.6, radius: 10, prob: 0.25 },
   crow:      { color: '#222233', stroke: '#666666', hp: 2,  speedMult: 1.4, radius: 12, prob: 0.20 },
   mini_boss: { color: '#ffaa00', stroke: '#ffddaa', hp: 10, speedMult: 0.3, radius: 24, prob: 0.05 },
-  big_boss:  { color: '#cc2233', stroke: '#ffddaa', hp: 100,speedMult: 0.2, radius: 40, prob: 0 },
+  big_boss:  { color: '#cc2233', stroke: '#ffddaa', hp: 100,speedMult: 1.0, radius: 40, prob: 0 },
 };
 
 // ================================================================
@@ -470,7 +470,7 @@ function getAvailableEnemyTypes(score) {
   if (score >= CONFIG.UNLOCK_SCORE_BUTTERFLY) types.push('butterfly');
   if (score >= CONFIG.UNLOCK_SCORE_CROW) types.push('crow');
   if (score >= CONFIG.UNLOCK_SCORE_MINI_BOSS) types.push('mini_boss');
-  if (score >= 1800 && !game.bigBossSpawned) types.push('big_boss');
+  if (score >= 1000 && !game.bigBossSpawned) types.push('big_boss');
   return types;
 }
 
@@ -628,8 +628,11 @@ function updateStateMachine() {
     enterGameOver();
   }
 
-  // v5.1: 杀死大 boss 才通关（不再看分数）
-  //（通关触发在 checkCollisions 中）
+  // PLAYING → CLEAR（杀死大boss 或 分数≥2000）
+  if (current === STATE.PLAYING && game.score >= CONFIG.SCORE_TO_CLEAR) {
+    game.state = STATE.CLEAR;
+    enterClear();
+  }
 
   game.prevState = game.state;
 }
@@ -2466,7 +2469,7 @@ function gameLoop(timestamp) {
     }
 
     // 大 boss 强制出场（prob=0 无法随机生成）
-    if (game.score >= 1800 && !game.bigBossSpawned) {
+    if (game.score >= 1000 && !game.bigBossSpawned) {
       const boss = createEnemy();
       boss.type = 'big_boss';
       const cfg = ENEMY_TYPES.big_boss;

@@ -233,6 +233,13 @@
 - 每次伤害从 `damage * 0.1` 改为 `damage * 0.05`（约 3 DPS，不再秒杀 boss）
 - 激光 life 从 30 → 70
 
+## CHANGE-023: 大boss 1000分出现 + 速度与毛玉相同 + 得分≥2000也通关
+**状态**: 已实现
+**方法**:
+- `getAvailableEnemyTypes()` 和强制出场：分数阈值 1800 → 1000
+- `ENEMY_TYPES.big_boss.speedMult`: 0.2 → 1.0
+- `updateStateMachine()`: 新增 `score >= 2000` → CLEAR（与杀boss并存）
+
 ## CHANGE-022: 灵梦 bomb 期间子弹不再翻倍
 **状态**: 已实现
 **方法**: 移除 `autoFire()` 中灵梦 bomb 期间副子弹 ×3 和额外 2 发主子弹的逻辑。
