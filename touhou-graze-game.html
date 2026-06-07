@@ -727,20 +727,11 @@ function updateCompanions() {
 
   game.companions = [];
   for (let i = 0; i < subCount; i++) {
-    let cx, cy;
-
-    if (game.currentChar === 'reimu') {
-      // 灵梦：子机在前方，中心对称
-      const offset = (i - (subCount - 1) / 2) * 20;
-      cx = p.x + offset;
-      cy = p.y - 30;
-    } else {
-      // 魔理沙/早苗：子机在两侧，y坐标相同
-      const side = i % 2 === 0 ? -1 : 1;
-      const row = Math.floor(i / 2);
-      cx = p.x + side * (30 + row * 20);
-      cy = p.y;
-    }
+    // 所有角色：子机在两侧，y坐标相同
+    const side = i % 2 === 0 ? -1 : 1;
+    const row = Math.floor(i / 2);
+    const cx = p.x + side * (30 + row * 20);
+    const cy = p.y;
 
     game.companions.push({ x: cx, y: cy, radius: 6 });
   }
@@ -785,16 +776,23 @@ function drawLasers() {
     ctx.lineTo(l.x + Math.cos(l.angle) * l.length, l.y + Math.sin(l.angle) * l.length);
     ctx.stroke();
 
-    // 激光碰撞检测
-    for (const e of game.enemies) {
-      if (dist(l.x, l.y, e.x, e.y) < e.radius + 10) {
-        e.hp -= l.damage * 0.016;
-        if (e.hp <= 0) {
-          const baseScore = ENEMY_SCORES[e.type] || 1;
-          game.score += baseScore;
-          createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
-          onEnemyKilled(e);
-          game.enemies.splice(game.enemies.indexOf(e), 1);
+    // 激光碰撞检测 - 检查激光路径上的点
+    const steps = Math.floor(l.length / 10);
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps;
+      const lx = l.x + Math.cos(l.angle) * l.length * t;
+      const ly = l.y + Math.sin(l.angle) * l.length * t;
+      
+      for (const e of game.enemies) {
+        if (dist(lx, ly, e.x, e.y) < e.radius + 5) {
+          e.hp -= l.damage * 0.1;
+          if (e.hp <= 0) {
+            const baseScore = ENEMY_SCORES[e.type] || 1;
+            game.score += baseScore;
+            createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
+            onEnemyKilled(e);
+            game.enemies.splice(game.enemies.indexOf(e), 1);
+          }
         }
       }
     }
@@ -846,27 +844,27 @@ function autoFire(now) {
       }
     }
   } else if (game.currentChar === 'marisa') {
-    // 魔理沙：贯通激光（持续伤害）
+    // 魔理沙：贯通激光（延伸到屏幕顶部）
     for (let i = 0; i < subCount; i++) {
       const c = game.companions[i];
       if (c) {
         game.lasers.push({
           x: c.x, y: c.y,
           angle: -Math.PI / 2,  // 向上
-          length: 200,
-          damage: CONFIG.SUB_BULLET_DMG,  // 0.5
-          life: 60,  // 1秒
-          maxLife: 60,
+          length: CONFIG.CANVAS_H,  // 延伸到屏幕顶部
+          damage: CONFIG.SUB_BULLET_DMG * 2,  // 1点伤害/秒
+          life: 30,  // 0.5秒
+          maxLife: 30,
         });
       }
     }
   } else if (game.currentChar === 'sanae') {
-    // 早苗：扇形2发
+    // 早苗：扇形2发，无跟踪
     for (let i = 0; i < subCount; i++) {
       const c = game.companions[i];
       if (c) {
         const baseAngle = -Math.PI / 2;
-        const spread = 0.3;  // 扇形角度
+        const spread = 0.4;  // 扇形角度
         game.bullets.push({
           x: c.x, y: c.y,
           radius: CONFIG.SUB_BULLET_RADIUS,
