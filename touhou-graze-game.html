@@ -837,10 +837,6 @@ function autoFire(now) {
   if (game.enemies.length === 0) return;
 
   let subCount = Math.min(CONFIG.MAX_SUB_BULLETS, Math.floor(game.debugMode ? 5 : game.power));
-  // 灵梦 bomb 期间 ×3
-  if (game.isBombActive && game.bombType === 'reimu') {
-    subCount = Math.min(CONFIG.MAX_SUB_BULLETS, subCount * 3);
-  }
 
   // 找最近敌人
   const sortedEnemies = [...game.enemies].sort((a, b) => {
@@ -851,13 +847,6 @@ function autoFire(now) {
   if (sortedEnemies[0]) {
     const angle = Math.atan2(sortedEnemies[0].y - p.y, sortedEnemies[0].x - p.x);
     game.bullets.push(createBullet(angle, true));
-    // 灵梦 bomb：额外发射 2 颗主子弹
-    if (game.isBombActive && game.bombType === 'reimu') {
-      for (let i = 0; i < 2; i++) {
-        const extraAngle = angle + (i - 0.5) * 0.2;
-        game.bullets.push(createBullet(extraAngle, true));
-      }
-    }
   }
 
   // 根据角色发射不同副子弹
@@ -883,7 +872,7 @@ function autoFire(now) {
       }
     }
   } else if (game.currentChar === 'marisa') {
-    // 魔理沙：贯通激光（延伸到屏幕顶部）
+    // 魔理沙：贯通激光（常亮，life≥射击间隔保持连续）
     for (let i = 0; i < subCount; i++) {
       const c = game.companions[i];
       if (c) {
@@ -892,8 +881,8 @@ function autoFire(now) {
           angle: -Math.PI / 2,
           length: CONFIG.CANVAS_H,
           damage: CONFIG.SUB_BULLET_DMG * 2,
-          life: 30,
-          maxLife: 30,
+          life: 65,
+          maxLife: 65,
         });
       }
     }
@@ -2160,7 +2149,7 @@ function convertPowerToBomb() {
 }
 
 /**
- * v8: 持续 bomb 效果 — 每秒造成伤害
+ * v8: 持续 bomb 效果 — 每 0.1s 造成 0.1 伤害
  */
 function updateBombEffect() {
   if (!game.isBombActive) return;
@@ -2176,18 +2165,18 @@ function updateBombEffect() {
     return;
   }
   
-  // 每秒造成伤害
-  if (now - game.bombDamageTimer >= 1000) {
+  // 每 0.1 秒造成 0.1 伤害；同步清除范围内敌人子弹
+  if (now - game.bombDamageTimer >= 100) {
     game.bombDamageTimer = now;
+    const dmg = 0.1;
 
     if (game.bombType === 'reimu') {
-      // 灵梦：自身周围圆形范围（半径200），每秒1伤害
       const p = game.player;
       if (p) {
         for (let i = game.enemies.length - 1; i >= 0; i--) {
           const e = game.enemies[i];
           if (dist(p.x, p.y, e.x, e.y) < 200) {
-            e.hp -= 1;
+            e.hp -= dmg;
             if (e.hp <= 0) {
               const baseScore = ENEMY_SCORES[e.type] || 1;
               game.score += baseScore;
@@ -2197,7 +2186,6 @@ function updateBombEffect() {
             }
           }
         }
-        // 连续清除范围内的敌人子弹
         for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
           const b = game.enemyBullets[i];
           if (dist(p.x, p.y, b.x, b.y) < 200) {
@@ -2207,10 +2195,9 @@ function updateBombEffect() {
         }
       }
     } else if (game.bombType === 'sanae') {
-      // 早苗：全屏爆炸，每秒 1 点
       for (let i = game.enemies.length - 1; i >= 0; i--) {
         const e = game.enemies[i];
-        e.hp -= 1;
+        e.hp -= dmg;
         if (e.hp <= 0) {
           const baseScore = ENEMY_SCORES[e.type] || 1;
           game.score += baseScore;
@@ -2219,22 +2206,19 @@ function updateBombEffect() {
           game.enemies.splice(i, 1);
         }
       }
-      // 全屏爆炸特效
       createExplosion(CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2, '#88ff88', 30);
-      // 全屏清除敌人子弹
       for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
         createExplosion(game.enemyBullets[i].x, game.enemyBullets[i].y, '#ffcc44', 3);
       }
       game.enemyBullets = [];
     } else if (game.bombType === 'marisa') {
-      // 魔理沙：前方 1/3 屏幕范围伤害
       const range = CONFIG.CANVAS_W / 3;
       const px = game.player.x;
       const py = game.player.y;
       for (let i = game.enemies.length - 1; i >= 0; i--) {
         const e = game.enemies[i];
         if (e.y < py && Math.abs(e.x - px) < range / 2) {
-          e.hp -= 1;
+          e.hp -= dmg;
           if (e.hp <= 0) {
             const baseScore = ENEMY_SCORES[e.type] || 1;
             game.score += baseScore;
@@ -2244,7 +2228,6 @@ function updateBombEffect() {
           }
         }
       }
-      // 清除前方范围内的敌人子弹
       for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
         const b = game.enemyBullets[i];
         if (b.y < py && Math.abs(b.x - px) < range / 2) {
