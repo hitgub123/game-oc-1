@@ -41,28 +41,30 @@
   <div class="status-bar">
     <span id="livesDisplay">命: ❤️×3</span>
     <span id="hpDisplay">HP: 100/100</span>
-    <span id="bombsDisplay">Bomb: [B]×2</span>
+    <span id="bombsDisplay">Bomb: ⭐×2</span>
     <span id="powerDisplay">Power: 0.0/5.0</span>
     <span id="scoreDisplay">得分: 0</span>
     <span id="fpsDisplay">FPS: 0</span>
   </div>
 
-  <!-- v5.1: 背景切换下拉菜单 -->
-  <div style="margin-top: 8px;">
+  <div style="margin-top: 10px; display: flex; justify-content: center; gap: 12px; align-items: center; flex-wrap: wrap;">
     <label style="color: #ccaa88; font-size: 13px;">背景：</label>
     <select id="bgSelect" style="background: #1a1a2e; color: #ccaa88; border: 1px solid #cc8866; border-radius: 4px; padding: 2px 6px; font-size: 13px;">
+      <option value="waterfall" selected>瀑布</option>
       <option value="beach">海滩</option>
       <option value="forest">森林</option>
       <option value="grassland">草原</option>
-      <option value="waterfall">瀑布</option>
       <option value="snow">雪山</option>
     </select>
-  </div>
-
-  <div style="margin-top: 10px; display: flex; justify-content: center; gap: 12px; align-items: center;">
+    <label style="color: #ccaa88; font-size: 13px;">角色：</label>
+    <select id="charSelect" style="background: #1a1a2e; color: #ccaa88; border: 1px solid #cc8866; border-radius: 4px; padding: 2px 6px; font-size: 13px;">
+      <option value="reimu">博丽灵梦</option>
+      <option value="marisa">雾雨魔理沙</option>
+      <option value="sanae">东风谷早苗</option>
+    </select>
     <button id="newGameBtn" style="background: #cc8866; color: #fff; border: none; border-radius: 6px; padding: 6px 18px; font-size: 14px; cursor: pointer; font-weight: bold;">新游戏</button>
     <label style="color: #ccaa88; font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
-      <input type="checkbox" id="debugToggle"> Debug（Power=5）
+      <input type="checkbox" id="debugToggle"> Debug
     </label>
   </div>
 </div>
@@ -283,16 +285,16 @@ const ENEMY_SCORES = {
   butterfly: 2,
   crow: 4,
   mini_boss: 10,
-  big_boss: 100,   // v5.1: 大 boss 击杀 100 分
+  big_boss: 100,
 };
 
 // 敌人类型配置表
 const ENEMY_TYPES = {
-  fuzzy:    { color: '#33dd55', stroke: '#88ff88', hp: 1,  speedMult: 1.0, radius: 10, prob: 0.50 },
-  butterfly:{ color: '#cc66ff', stroke: '#ff99ff', hp: 1,  speedMult: 1.6, radius: 10, prob: 0.25 },
-  crow:     { color: '#222233', stroke: '#666666', hp: 2,  speedMult: 1.4, radius: 12, prob: 0.20 },
-  mini_boss:{ color: '#ffaa00', stroke: '#ffddaa', hp: 10, speedMult: 0.4, radius: 24, prob: 0.05 },
-  big_boss: { color: '#cc2233', stroke: '#ffddaa', hp: 100, speedMult: 0.3, radius: 40, prob: 0 },  // v5.1
+  fuzzy:     { color: '#33dd55', stroke: '#88ff88', hp: 1,  speedMult: 1.0, radius: 10, prob: 0.50 },
+  butterfly: { color: '#cc66ff', stroke: '#ff99ff', hp: 1,  speedMult: 1.6, radius: 10, prob: 0.25 },
+  crow:      { color: '#222233', stroke: '#666666', hp: 2,  speedMult: 1.4, radius: 12, prob: 0.20 },
+  mini_boss: { color: '#ffaa00', stroke: '#ffddaa', hp: 10, speedMult: 0.3, radius: 24, prob: 0 },
+  big_boss:  { color: '#cc2233', stroke: '#ffddaa', hp: 100,speedMult: 0.2, radius: 40, prob: 0 },
 };
 
 // ================================================================
@@ -352,6 +354,7 @@ const game = {
   // --- 对象容器 ---
   player: null,
   enemies: [],
+  enemyBullets: [],
   bullets: [],
   particles: [],
   // --- v3.2: 时间基准（替代 setInterval）---
@@ -362,10 +365,24 @@ const game = {
   bigBossSpawned: false,
 
   // --- v5.1: 当前背景 ---
-  currentBg: 'beach',
+  currentBg: 'waterfall',
+
+  // --- v8: Bomb 持续状态 ---
+  bombEndTime: 0,        // bomb 结束时间
+  bombType: null,         // bomb 类型 ('reimu'|'marisa'|'sanae')
+  bombDamageTimer: 0,     // bomb 伤害计时器
 
   // --- v6: Debug 模式 ---
   debugMode: false,
+
+  // --- v7: 角色选择 ---
+  currentChar: 'reimu',
+
+  // --- v7: 辅助子机 ---
+  companions: [],
+
+  // --- v7: 激光系统 ---
+  lasers: [],
 
   // --- FPS ---
   fps: 0,
@@ -436,62 +453,48 @@ function getEnemyColor(type) {
  * v3: 根据当前分数返回可用的敌人类型
  */
 function getAvailableEnemyTypes(score) {
-  const types = ['fuzzy']; // 毛球永远可用
+  const types = ['fuzzy'];
   if (score >= CONFIG.UNLOCK_SCORE_BUTTERFLY) types.push('butterfly');
-  if (score >= CONFIG.UNLOCK_SCORE_CROW)      types.push('crow');
+  if (score >= CONFIG.UNLOCK_SCORE_CROW) types.push('crow');
   if (score >= CONFIG.UNLOCK_SCORE_MINI_BOSS) types.push('mini_boss');
-  // v5.1: 大 boss（只出 1 只，1800 分）
   if (score >= 1800 && !game.bigBossSpawned) types.push('big_boss');
   return types;
 }
 
 /**
- * 创建敌人 — v3: 按分数解锁类型
+ * 创建敌人 — 母敌人从边缘生成，上半屏巡逻
  */
 function createEnemy() {
-  // 1. 取当前可用类型
   const available = getAvailableEnemyTypes(game.score);
-
-  // 2. 在可用类型中按累积概率抽样
   const availableProbs = available.map(t => ENEMY_TYPES[t].prob);
   const totalProb = availableProbs.reduce((a, b) => a + b, 0);
   const r = Math.random() * totalProb;
-  let cumulative = 0;
-  let type = available[0];
+  let cumulative = 0, type = available[0];
   for (let i = 0; i < available.length; i++) {
     cumulative += availableProbs[i];
-    if (r < cumulative) {
-      type = available[i];
-      break;
-    }
+    if (r < cumulative) { type = available[i]; break; }
   }
 
-  // v5.1: 大 boss 特殊处理：只出 1 只
-  if (type === 'big_boss') {
-    game.bigBossSpawned = true;
-  }
+  if (type === 'big_boss') game.bigBossSpawned = true;
 
   const cfg = ENEMY_TYPES[type];
 
-  // v6: 从上/左/右 3 边随机出现，左右只在上半屏
+  // 从边缘生成（上/右/左）
   const side = randInt(0, 3);
   let x, y;
   switch (side) {
     case 0: x = randInt(0, CONFIG.CANVAS_W); y = -cfg.radius - 5; break;
-    case 1: x = CONFIG.CANVAS_W + cfg.radius + 5; y = randInt(0, CONFIG.CANVAS_H * 0.5); break;
-    case 2: x = -cfg.radius - 5; y = randInt(0, CONFIG.CANVAS_H * 0.5); break;
+    case 1: x = CONFIG.CANVAS_W + cfg.radius + 5; y = randInt(0, CONFIG.CANVAS_H); break;
+    case 2: x = -cfg.radius - 5; y = randInt(0, CONFIG.CANVAS_H); break;
   }
 
   return {
-    x, y,
-    type: type,
-    radius: cfg.radius,
-    hp: cfg.hp,
-    maxHp: cfg.hp,
+    x, y, type, radius: cfg.radius, hp: cfg.hp, maxHp: cfg.hp,
     speed: CONFIG.ENEMY_SPEED * cfg.speedMult,
     vx: 0, vy: 0,
-    phase: Math.random() * Math.PI * 2,   // 蝴蝶摆动相位
-    hitFlash: 0,                          // 受击闪烁帧计数
+    phase: Math.random() * Math.PI * 2,
+    hitFlash: 0,
+    shootTimer: 0,
   };
 }
 
@@ -549,9 +552,13 @@ function enterPlaying() {
   game.scoreForNextLife = CONFIG.SCORE_FOR_LIFE;
   game.scoreForNextBomb = CONFIG.SCORE_FOR_BOMB;
   game.isBombActive = false;
+  game.bombEndTime = 0;
+  game.bombType = null;
+  game.bombDamageTimer = 0;
   game.bonusMessages = [];
   game.frameCount = 0;
   game.enemies = [];
+  game.enemyBullets = [];
   game.bullets = [];
   game.particles = [];
   game.player = createPlayer();
@@ -562,6 +569,10 @@ function enterPlaying() {
 
   // v5.1: 重置大 boss 状态
   game.bigBossSpawned = false;
+
+  // v7: 重置辅助子机和激光
+  game.companions = [];
+  game.lasers = [];
 
   // 开局立即生成 3 个敌人
   for (let i = 0; i < 3; i++) {
@@ -652,6 +663,12 @@ bgSelect.addEventListener('change', (e) => {
   game.currentBg = e.target.value;
 });
 
+// v7: 角色选择
+const charSelect = document.getElementById('charSelect');
+charSelect.addEventListener('change', (e) => {
+  game.currentChar = e.target.value;
+});
+
 // v6: 新游戏按钮
 document.getElementById('newGameBtn').addEventListener('click', () => {
   initAudio();
@@ -698,38 +715,179 @@ function updatePlayer() {
 
 let lastFireTime = 0;
 
+// ================================================================
+//  v7: 辅助子机系统
+// ================================================================
+
+function updateCompanions() {
+  const p = game.player;
+  if (!p) return;
+
+  const subCount = Math.min(CONFIG.MAX_SUB_BULLETS, Math.floor(game.debugMode ? 5 : game.power));
+
+  game.companions = [];
+  for (let i = 0; i < subCount; i++) {
+    let cx, cy;
+
+    if (game.currentChar === 'reimu') {
+      // 灵梦：子机在前方，中心对称
+      const offset = (i - (subCount - 1) / 2) * 20;
+      cx = p.x + offset;
+      cy = p.y - 30;
+    } else {
+      // 魔理沙/早苗：子机在两侧，y坐标相同
+      const side = i % 2 === 0 ? -1 : 1;
+      const row = Math.floor(i / 2);
+      cx = p.x + side * (30 + row * 20);
+      cy = p.y;
+    }
+
+    game.companions.push({ x: cx, y: cy, radius: 6 });
+  }
+}
+
+function drawCompanions() {
+  for (const c of game.companions) {
+    ctx.fillStyle = '#88ccff';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#4488ff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+// ================================================================
+//  v7: 激光系统
+// ================================================================
+
+function updateLasers() {
+  for (let i = game.lasers.length - 1; i >= 0; i--) {
+    const l = game.lasers[i];
+    l.life--;
+    if (l.life <= 0) {
+      game.lasers.splice(i, 1);
+    }
+  }
+}
+
+function drawLasers() {
+  for (const l of game.lasers) {
+    const alpha = l.life / l.maxLife;
+    ctx.strokeStyle = `rgba(100, 200, 255, ${alpha * 0.8})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(l.x, l.y);
+    ctx.lineTo(l.x + Math.cos(l.angle) * l.length, l.y + Math.sin(l.angle) * l.length);
+    ctx.stroke();
+
+    // 激光碰撞检测
+    for (const e of game.enemies) {
+      if (dist(l.x, l.y, e.x, e.y) < e.radius + 10) {
+        e.hp -= l.damage * 0.016;
+        if (e.hp <= 0) {
+          const baseScore = ENEMY_SCORES[e.type] || 1;
+          game.score += baseScore;
+          createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
+          onEnemyKilled(e);
+          game.enemies.splice(game.enemies.indexOf(e), 1);
+        }
+      }
+    }
+  }
+}
+
 /**
- * v3.2: 自动瞄准射击 — 1 主 + floor(power) 副（独立目标）
+ * v7: 自动瞄准射击 — 每个角色不同副子弹行为
  */
 function autoFire(now) {
   const p = game.player;
   if (!p) return;
   if (game.enemies.length === 0) return;
 
-  // 找最近的 N 个敌人（按距离排序）
-  const subCount = Math.min(CONFIG.MAX_SUB_BULLETS, Math.floor(game.debugMode ? 5 : game.power));
-  const totalNeeded = 1 + subCount;
+  let subCount = Math.min(CONFIG.MAX_SUB_BULLETS, Math.floor(game.debugMode ? 5 : game.power));
+  // 灵梦 bomb 期间 ×3
+  if (game.isBombActive && game.bombType === 'reimu') {
+    subCount = Math.min(CONFIG.MAX_SUB_BULLETS, subCount * 3);
+  }
+
+  // 找最近敌人
   const sortedEnemies = [...game.enemies].sort((a, b) => {
-    const da = dist(p.x, p.y, a.x, a.y);
-    const db = dist(p.x, p.y, b.x, b.y);
-    return da - db;
+    return dist(p.x, p.y, a.x, a.y) - dist(p.x, p.y, b.x, b.y);
   });
 
-  // 1 颗主子弹：追踪最近敌人
+  // 主子弹（所有角色相同）
   if (sortedEnemies[0]) {
     const angle = Math.atan2(sortedEnemies[0].y - p.y, sortedEnemies[0].x - p.x);
     game.bullets.push(createBullet(angle, true));
+    // 灵梦 bomb：额外发射 2 颗主子弹
+    if (game.isBombActive && game.bombType === 'reimu') {
+      for (let i = 0; i < 2; i++) {
+        const extraAngle = angle + (i - 0.5) * 0.2;
+        game.bullets.push(createBullet(extraAngle, true));
+      }
+    }
   }
 
-  // 副子弹：每颗追踪一个目标（如果目标不够则复用或朝上）
-  for (let i = 0; i < subCount; i++) {
-    const target = sortedEnemies[i + 1] || sortedEnemies[0];
-    if (target) {
-      const angle = Math.atan2(target.y - p.y, target.x - p.x);
-      game.bullets.push(createBullet(angle, false, i));  // v4: 传入 i 作为 subIndex
-    } else {
-      // 没有目标，朝上发射
-      game.bullets.push(createBullet(-Math.PI / 2, false, i));
+  // 根据角色发射不同副子弹
+  if (game.currentChar === 'reimu') {
+    // 灵梦：子机发射普通副子弹（同现在）
+    for (let i = 0; i < subCount; i++) {
+      const target = sortedEnemies[i + 1] || sortedEnemies[0];
+      if (target) {
+        const angle = Math.atan2(target.y - p.y, target.x - p.x);
+        game.bullets.push(createBullet(angle, false, i));
+      } else {
+        game.bullets.push(createBullet(-Math.PI / 2, false, i));
+      }
+    }
+  } else if (game.currentChar === 'marisa') {
+    // 魔理沙：贯通激光（持续伤害）
+    for (let i = 0; i < subCount; i++) {
+      const c = game.companions[i];
+      if (c) {
+        game.lasers.push({
+          x: c.x, y: c.y,
+          angle: -Math.PI / 2,  // 向上
+          length: 200,
+          damage: CONFIG.SUB_BULLET_DMG,  // 0.5
+          life: 60,  // 1秒
+          maxLife: 60,
+        });
+      }
+    }
+  } else if (game.currentChar === 'sanae') {
+    // 早苗：扇形2发
+    for (let i = 0; i < subCount; i++) {
+      const c = game.companions[i];
+      if (c) {
+        const baseAngle = -Math.PI / 2;
+        const spread = 0.3;  // 扇形角度
+        game.bullets.push({
+          x: c.x, y: c.y,
+          radius: CONFIG.SUB_BULLET_RADIUS,
+          vx: Math.cos(baseAngle - spread) * CONFIG.BULLET_SPEED,
+          vy: Math.sin(baseAngle - spread) * CONFIG.BULLET_SPEED,
+          life: CONFIG.BULLET_LIFE,
+          damage: CONFIG.SUB_BULLET_DMG,
+          isMain: false,
+          color: SUB_COLORS[i % SUB_COLORS.length],
+        });
+        game.bullets.push({
+          x: c.x, y: c.y,
+          radius: CONFIG.SUB_BULLET_RADIUS,
+          vx: Math.cos(baseAngle + spread) * CONFIG.BULLET_SPEED,
+          vy: Math.sin(baseAngle + spread) * CONFIG.BULLET_SPEED,
+          life: CONFIG.BULLET_LIFE,
+          damage: CONFIG.SUB_BULLET_DMG,
+          isMain: false,
+          color: SUB_COLORS[i % SUB_COLORS.length],
+        });
+      }
     }
   }
 
@@ -737,13 +895,16 @@ function autoFire(now) {
 }
 
 /**
- * 更新敌人 — 朝玩家移动 + 类型特性
+ * 更新敌人 — 母敌人巡逻+射击，子敌人下半屏
  */
 function updateEnemies() {
   const p = game.player;
   if (!p) return;
 
-  for (const e of game.enemies) {
+  for (let i = game.enemies.length - 1; i >= 0; i--) {
+    const e = game.enemies[i];
+
+    // 朝玩家移动
     const dx = p.x - e.x;
     const dy = p.y - e.y;
     const d = dist(0, 0, dx, dy);
@@ -757,14 +918,65 @@ function updateEnemies() {
     e.x += e.vx;
     e.y += e.vy;
 
-    // 蝴蝶：横向摆动，轨迹更飘
+    // 蝴蝶：横向摆动
     if (e.type === 'butterfly') {
       e.phase += 0.06;
       e.x += Math.sin(e.phase) * 1.8;
     }
 
+    // 敌人射击
+    e.shootTimer++;
+    if (e.shootTimer >= 120) {  // 每2秒射击一次
+      e.shootTimer = 0;
+      // 朝玩家发射子弹
+      const angle = Math.atan2(p.y - e.y, p.x - e.x);
+      game.enemyBullets.push({
+        x: e.x, y: e.y,
+        vx: Math.cos(angle) * 3,
+        vy: Math.sin(angle) * 3,
+        radius: 4,
+        color: '#ff6666',
+        life: 180,
+      });
+      playSound('shoot');
+    }
+
     // 受击闪烁递减
     if (e.hitFlash > 0) e.hitFlash--;
+
+    // 出屏移除
+    if (e.y > CONFIG.CANVAS_H + 50 || e.x < -50 || e.x > CONFIG.CANVAS_W + 50 || e.y < -50) {
+      game.enemies.splice(i, 1);
+    }
+  }
+}
+
+function updateEnemyBullets() {
+  for (let i = game.enemyBullets.length - 1; i >= 0; i--) {
+    const b = game.enemyBullets[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    b.life--;
+
+    // 子弹出屏或生命结束
+    if (b.life <= 0 || b.y > CONFIG.CANVAS_H + 20 || b.y < -20 || b.x < -20 || b.x > CONFIG.CANVAS_W + 20) {
+      game.enemyBullets.splice(i, 1);
+    }
+  }
+}
+
+function drawEnemyBullets() {
+  for (const b of game.enemyBullets) {
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 发光效果
+    ctx.fillStyle = b.color + '44';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.radius * 2, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
@@ -823,7 +1035,7 @@ function updateParticles() {
  * 敌人被击杀时 — 概率直接 +0.1 Power（v3.3：不生成道具）
  */
 function onEnemyKilled(enemy) {
-  // v5.1: 大 boss 不掉落 power
+  // 大 boss 和子敌人不掉落 power
   if (enemy.type === 'big_boss') return;
   // v3.3: 道具不再生成，直接 +0.1 power
   if (enemy.type !== 'mini_boss' && Math.random() < CONFIG.POWER_ITEM_DROP_RATE) {
@@ -932,6 +1144,35 @@ function checkCollisions(now) {
     }
   }
 
+  // ---- 母敌人子弹 vs 玩家 ----
+  if (now >= p.invincibleUntil) {
+    for (let bi = game.enemyBullets.length - 1; bi >= 0; bi--) {
+      const b = game.enemyBullets[bi];
+      if (dist(p.x, p.y, b.x, b.y) < p.radius + b.radius) {
+        // 玩家受伤
+        p.hp -= CONFIG.HP_LOSS;
+        p.invincibleUntil = now + CONFIG.DAMAGE_INTERVAL;
+        createExplosion(p.x, p.y, '#ff6644', 12);
+        playSound('hit');
+        game.enemyBullets.splice(bi, 1);
+
+        if (p.hp <= 0) {
+          if (game.bombs > 0) {
+            triggerDeathSave(now);
+          } else {
+            game.lives--;
+            createExplosion(p.x, p.y, '#ff4444', 30);
+            if (game.lives > 0) {
+              p.hp = CONFIG.PLAYER_MAX_HP;
+              const bombsAtDeath = game.bombs;
+              game.bombs = Math.min(CONFIG.MAX_BOMBS, bombsAtDeath + 2);
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
 }
 
 /**
@@ -1185,8 +1426,9 @@ function drawPlayer() {
     ctx.globalAlpha = 0.4;
   }
 
-  // 身体（小）
-  ctx.fillStyle = '#ee2233';
+  // 身体（小）— bomb 期间金色
+  const bodyColor = (game.isBombActive && performance.now() < game.bombEndTime) ? '#ffcc44' : '#ee2233';
+  ctx.fillStyle = bodyColor;
   ctx.fillRect(p.x - 6, p.y + 5, 12, 15);
 
   // 头（大圆，肤色）
@@ -1280,13 +1522,13 @@ function drawEnemies() {
 // Q版毛球怪
 function drawQFuzzy(e) {
   const x = e.x, y = e.y, r = e.radius;
-  
+
   // 毛茸茸身体
   ctx.fillStyle = '#33dd55';
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
-  
+
   // 毛刺效果
   ctx.fillStyle = '#28c744';
   for (let i = 0; i < 8; i++) {
@@ -1297,7 +1539,7 @@ function drawQFuzzy(e) {
     ctx.arc(bx, by, 4, 0, Math.PI * 2);
     ctx.fill();
   }
-  
+
   // 大眼睛
   ctx.fillStyle = '#fff';
   ctx.beginPath();
@@ -1306,7 +1548,7 @@ function drawQFuzzy(e) {
   ctx.beginPath();
   ctx.ellipse(x + 4, y - 2, 5, 6, 0, 0, Math.PI * 2);
   ctx.fill();
-  
+
   // 眼珠
   ctx.fillStyle = '#000';
   ctx.beginPath();
@@ -1315,7 +1557,7 @@ function drawQFuzzy(e) {
   ctx.beginPath();
   ctx.arc(x + 5, y - 1, 2.5, 0, Math.PI * 2);
   ctx.fill();
-  
+
   // 高光
   ctx.fillStyle = '#fff';
   ctx.beginPath();
@@ -1324,14 +1566,14 @@ function drawQFuzzy(e) {
   ctx.beginPath();
   ctx.arc(x + 6, y - 2, 1, 0, Math.PI * 2);
   ctx.fill();
-  
+
   // 小嘴巴
   ctx.strokeStyle = '#1b5e20';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.arc(x, y + 4, 3, 0.1, Math.PI - 0.1);
   ctx.stroke();
-  
+
   // 腮红
   ctx.fillStyle = 'rgba(255,150,150,0.3)';
   ctx.beginPath();
@@ -1342,6 +1584,7 @@ function drawQFuzzy(e) {
   ctx.fill();
 }
 
+// Q版子敌人（黄色毛玉）
 // Q版蝴蝶
 function drawQButterfly(e) {
   const x = e.x, y = e.y, r = e.radius;
@@ -1777,59 +2020,39 @@ function useBomb() {
   game.isBombActive = true;
   game.bombAnimStartTime = performance.now();
 
+  // 根据角色设置 bomb 持续时间和类型
+  const now = performance.now();
+  switch (game.currentChar) {
+    case 'reimu':
+      game.bombEndTime = now + 9000;  // 9 秒
+      game.bombType = 'reimu';
+      break;
+    case 'marisa':
+      game.bombEndTime = now + 5000;  // 5 秒
+      game.bombType = 'marisa';
+      break;
+    case 'sanae':
+      game.bombEndTime = now + 3000;  // 3 秒
+      game.bombType = 'sanae';
+      break;
+  }
+
+  // 玩家无敌 + 金色
   if (game.player) {
-    game.player.invincibleUntil = performance.now() + CONFIG.BOMB_INVINCIBLE_TIME;
+    game.player.invincibleUntil = game.bombEndTime;
   }
 
   playSound('bomb');
-
-  // v5: 对全体敌人造成伤害
-  for (let i = game.enemies.length - 1; i >= 0; i--) {
-    const e = game.enemies[i];
-    e.hp -= CONFIG.BOMB_DAMAGE;
-    if (e.hp <= 0) {
-      // 击杀：双倍分数
-      const baseScore = ENEMY_SCORES[e.type] || 1;
-      game.score += baseScore * CONFIG.BOMB_SCORE_MULT;
-      createExplosion(e.x, e.y, getEnemyColor(e.type), 10);
-      onEnemyKilled(e);
-      // v5.1: 大 boss 被 Bomb 击杀 → 通关
-      if (e.type === 'big_boss') {
-        game.state = STATE.CLEAR;
-        enterClear();
-      }
-      game.enemies.splice(i, 1);
-    } else {
-      // 未击杀：视觉反馈
-      e.hitFlash = 15;
-    }
-  }
-  checkScoreRewards();
-
-  // 20 颗金色大子弹 360° 散布
-  const angleStep = (Math.PI * 2) / CONFIG.BOMB_BULLET_COUNT;
-  for (let i = 0; i < CONFIG.BOMB_BULLET_COUNT; i++) {
-    const angle = angleStep * i;
-    game.bullets.push({
-      x: game.player.x,
-      y: game.player.y,
-      radius: CONFIG.BOMB_BULLET_RADIUS,
-      vx: Math.cos(angle) * CONFIG.BOMB_BULLET_SPEED,
-      vy: Math.sin(angle) * CONFIG.BOMB_BULLET_SPEED,
-      life: 120,
-      color: '#ffcc44',
-      damage: 0,        // Bomb 子弹不参与碰撞伤害
-    });
-  }
 }
 
 /**
  * v5: C 键转换 — power 转 bomb
  */
 function convertPowerToBomb() {
-  if (game.power < 1) return;
+  if (!game.debugMode && game.power < 1) return;
   game.power -= 1;
   game.bombs = Math.min(CONFIG.MAX_BOMBS, game.bombs + 1);
+  if (game.debugMode) game.power = 5;  // debug 模式下恢复 power
   game.bonusMessages.push({
     text: '-1 POWER → +1 BOMB',
     startTime: performance.now(),
@@ -1838,6 +2061,59 @@ function convertPowerToBomb() {
     createExplosion(game.player.x, game.player.y - 20, '#ffcc44', 8);
   }
   playSound('convert');
+}
+
+/**
+ * v8: 持续 bomb 效果 — 每秒造成伤害
+ */
+function updateBombEffect() {
+  if (!game.isBombActive) return;
+  
+  const now = performance.now();
+  if (now >= game.bombEndTime) {
+    game.isBombActive = false;
+    game.bombType = null;
+    return;
+  }
+  
+  // 每秒造成伤害
+  if (now - game.bombDamageTimer >= 1000) {
+    game.bombDamageTimer = now;
+    
+    if (game.bombType === 'sanae') {
+      // 早苗：全屏爆炸，每秒 1 点
+      for (const e of game.enemies) {
+        e.hp -= 1;
+        if (e.hp <= 0) {
+          const baseScore = ENEMY_SCORES[e.type] || 1;
+          game.score += baseScore;
+          createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
+          onEnemyKilled(e);
+          game.enemies.splice(game.enemies.indexOf(e), 1);
+        }
+      }
+      // 全屏爆炸特效
+      createExplosion(CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2, '#88ff88', 30);
+    } else if (game.bombType === 'marisa') {
+      // 魔理沙：前方 1/3 屏幕范围伤害
+      const range = CONFIG.CANVAS_W / 3;
+      const px = game.player.x;
+      const py = game.player.y;
+      for (const e of game.enemies) {
+        if (e.y < py && Math.abs(e.x - px) < range / 2) {
+          e.hp -= 1;
+          if (e.hp <= 0) {
+            const baseScore = ENEMY_SCORES[e.type] || 1;
+            game.score += baseScore;
+            createExplosion(e.x, e.y, getEnemyColor(e.type), 8);
+            onEnemyKilled(e);
+            game.enemies.splice(game.enemies.indexOf(e), 1);
+          }
+        }
+      }
+    }
+    // 灵梦：只是持续 9 秒，子弹 ×3 在 autoFire 中处理
+  }
 }
 
 /**
@@ -1875,13 +2151,8 @@ function drawBombEffect() {
 
   const now = performance.now();
   const elapsed = now - game.bombAnimStartTime;
-  const duration = CONFIG.BOMB_ANIMATION_DURATION;
+  const duration = game.bombEndTime - game.bombAnimStartTime;
   const progress = Math.min(elapsed / duration, 1);
-
-  if (progress >= 1) {
-    game.isBombActive = false;
-    return;
-  }
 
   // 白闪（前 300ms）
   if (progress < 0.3) {
@@ -1891,18 +2162,12 @@ function drawBombEffect() {
   }
 
   // 扩散光环
-  const ringRadius = progress * 300;
-  const ringAlpha = (1 - progress) * 0.6;
+  const ringRadius = progress * 400;
+  const ringAlpha = (1 - progress) * 0.4;
   ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.arc(p.x, p.y, ringRadius, 0, Math.PI * 2);
-  ctx.stroke();
-
-  ctx.strokeStyle = `rgba(255, 200, 100, ${ringAlpha * 0.5})`;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, ringRadius * 0.8, 0, Math.PI * 2);
   ctx.stroke();
 
   // "BOMB!" 文字
@@ -1913,6 +2178,26 @@ function drawBombEffect() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('BOMB!', CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2);
+  }
+
+  // 魔理沙：显示前方范围
+  if (game.bombType === 'marisa') {
+    const range = CONFIG.CANVAS_W / 3;
+    ctx.fillStyle = 'rgba(100, 200, 255, 0.1)';
+    ctx.fillRect(p.x - range / 2, 0, range, p.y);
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x - range / 2, 0, range, p.y);
+  }
+
+  // 早苗：显示全屏爆炸圈
+  if (game.bombType === 'sanae') {
+    const expandRadius = (elapsed % 1000) / 1000 * CONFIG.CANVAS_W;
+    ctx.strokeStyle = 'rgba(100, 255, 100, 0.5)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(CONFIG.CANVAS_W / 2, CONFIG.CANVAS_H / 2, expandRadius, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }
 
@@ -1950,8 +2235,18 @@ function drawBonusMessages() {
 function updateStatusBar() {
   livesDisplay.textContent = `命: ❤️×${game.lives}`;
   hpDisplay.textContent = `HP: ${game.player ? game.player.hp : 0}/${game.player ? game.player.maxHp : 100}`;
-  bombsDisplay.textContent = `Bomb: [B]×${game.bombs}`;
-  powerDisplay.textContent = `Power: ${game.power.toFixed(1)}/5.0`;
+
+  // v7: bomb 显示改为绿色星星
+  bombsDisplay.textContent = `Bomb: ⭐×${game.bombs}`;
+
+  // v7: power 显示，>=4时粗体蓝色
+  const powerText = `Power: ${game.power.toFixed(1)}/5.0`;
+  if (game.power >= 4) {
+    powerDisplay.innerHTML = `<span style="color: #4488ff; font-weight: bold;">${powerText}</span>`;
+  } else {
+    powerDisplay.textContent = powerText;
+  }
+
   scoreDisplay.textContent = `得分: ${game.score}`;
 }
 
@@ -2041,24 +2336,6 @@ function gameLoop(timestamp) {
       game.lastSpawnTime = now;
     }
 
-    // v5.1: 大 boss 强制出场（score ≥ 1800，只出 1 只）
-    if (game.score >= 1800 && !game.bigBossSpawned && game.enemies.length < CONFIG.ENEMY_MAX) {
-      const bbCfg = ENEMY_TYPES.big_boss;
-      game.enemies.push({
-        x: CONFIG.CANVAS_W / 2,
-        y: -bbCfg.radius - 5,
-        type: 'big_boss',
-        radius: bbCfg.radius,
-        hp: bbCfg.hp,
-        maxHp: bbCfg.hp,
-        speed: CONFIG.ENEMY_SPEED * bbCfg.speedMult,
-        vx: 0, vy: 0,
-        phase: 0,
-        hitFlash: 0,
-      });
-      game.bigBossSpawned = true;
-    }
-
     updatePlayer();
 
     // 自动开火
@@ -2068,8 +2345,14 @@ function gameLoop(timestamp) {
     }
 
     updateEnemies();
+    updateBombEffect();
+    updateEnemyBullets();
     updateBullets();
     updateParticles();
+
+    // v7: 更新辅助子机和激光
+    updateCompanions();
+    updateLasers();
 
     checkCollisions(now);
 
@@ -2079,8 +2362,11 @@ function gameLoop(timestamp) {
   // ---- 步骤 4: 渲染 ----
   drawBackground();
   drawEnemies();
+  drawEnemyBullets();
   drawBullets();
   drawParticles();
+  drawCompanions();
+  drawLasers();
   drawPlayer();
   drawBombEffect();
   drawBonusMessages();
